@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DeepSeek 桌宠",
+    "description": "把 DeepSeek 账户余额交给一只悬浮在 Windows 桌面上的蓝鲸女仆桌宠：宿主端查询余额并通过 127.0.0.1 回环接口推送，另附 pet_balance / pet_control 两个工具，可直接问余额或让桌宠说话。"
+  }
+}

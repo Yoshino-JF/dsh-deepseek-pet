@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DeepSeek Desktop Pet",
+    "description": "Hands your DeepSeek account balance to a whale-maid desktop pet floating on Windows. The host polls the balance and serves it over a 127.0.0.1 loopback route; pet_balance and pet_control tools let the agent read the balance or make the pet talk."
+  }
+}

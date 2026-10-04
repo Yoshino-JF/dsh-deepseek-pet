@@ -1,0 +1,9 @@
+{
+  "note": "光柱锚点：设备矩形按立绘画布的比例分数记录；渲染时乘以立绘在窗口里的实际尺寸，因此缩放/换姿态时幅度自动一致",
+  "measuredFrom": "assets/poses/handheld.png (720x1090)",
+  "measuredAt": "2026-10-03",
+  "deviceTop": 0.548,
+  "deviceBottom": 0.645,
+  "deviceWidth": 0.458,
+  "deviceCenterX": 0.507
+}

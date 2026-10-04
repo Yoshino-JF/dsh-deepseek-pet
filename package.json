@@ -1,0 +1,49 @@
+{
+  "name": "dsh-deepseek-pet",
+  "version": "0.2.3",
+  "license": "MIT",
+  "author": "Yoshino-JF",
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "https://github.com/Yoshino-JF/dsh-deepseek-pet.git" },
+  "homepage": "https://github.com/Yoshino-JF/dsh-deepseek-pet#readme",
+  "bugs": { "url": "https://github.com/Yoshino-JF/dsh-deepseek-pet/issues" },
+  "private": false,
+  "dependencies": { "@deepseek-ai/dsh-tools": "0.2.0-rc.2" },
+  "peerDependencies": { "@deepseek-ai/dsh-tools": "*" },
+  "description": "DeepSeek 桌宠：把「DSH 账户余额 + 蓝鲸女仆桌宠」连起来。宿主端查询余额、通过 127.0.0.1 回环接口喂给桌面悬浮窗，并提供 pet_balance / pet_control 两个模型工具。",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md",
+    "LICENSE",
+    "LICENSE-ART.md",
+    "RELEASE.md",
+    "pet/",
+    "pet-src/"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "desktop-pet",
+    "balance"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

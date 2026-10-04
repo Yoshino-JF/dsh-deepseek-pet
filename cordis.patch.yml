@@ -1,0 +1,21 @@
+# dsh bundle patch: 把 DeepSeek 桌宠插件插入本 profile 的插件层。
+#
+# 下面 config 里的字段都可省略（省略即用 index.js 里的默认值）。
+# 想改端口/桌宠路径/刷新间隔时，改这里保存即可热生效（config 变更会重装该行）。
+- insert:
+    - id: dsh-pet
+      name: '@local/dsh-pet'
+      config:
+        # 桌宠回环状态接口的端口（只监听 127.0.0.1）
+        port: 47831
+        # 桌宠可执行文件；首次运行前请先执行 D:\DeepSeek\deepseek-pet\build.cmd
+        petPath: 'D:\DeepSeek\deepseek-pet\build\DeepSeekPet.exe'
+        # 用哪条凭据查余额（DSH 凭据库里的引用名）
+        credential: DEEPSEEK_API_KEY
+        # 余额接口与刷新策略
+        apiBase: 'https://api.deepseek.com'
+        refreshSeconds: 60
+        lowBalance: 10
+        # 宿主启动后自动把桌宠叫起来（延迟 3 秒，避开宿主 boot 期）
+        autoStart: true
+        startDelayMs: 3000

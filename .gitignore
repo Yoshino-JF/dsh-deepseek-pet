@@ -1,0 +1,23 @@
+node_modules/
+# 构建产物与中间件
+build/
+*.bak
+*.bak-*
+.trash/
+new-pose/
+grade-work/
+
+# 运行期日志与个人配置
+*.log
+config.json
+pet.log
+
+# 桌宠运行载荷（随包分发但由打包脚本生成，不入源码版本）
+pet/DeepSeekPet.exe
+
+# 编辑器/系统
+.vs/
+.vscode/
+Thumbs.db
+Desktop.ini
+pnpm-lock.yaml
