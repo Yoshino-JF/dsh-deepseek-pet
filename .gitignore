@@ -12,9 +12,6 @@ grade-work/
 config.json
 pet.log
 
-# 桌宠运行载荷（随包分发但由打包脚本生成，不入源码版本）
-pet/DeepSeekPet.exe
-
 # 编辑器/系统
 .vs/
 .vscode/
