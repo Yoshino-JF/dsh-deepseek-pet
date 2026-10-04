@@ -3,6 +3,10 @@
 DeepSeek 桌宠：一只悬浮在桌面上的鲸鱼女仆（WPF 原生窗口、鼠标穿透、只在 Windows 上运行）。
 她会**跟着 DSH 的状态变化**：待机 → 玩游戏 → 深度求索（干活时盘腿冥想）→ 打瞌睡，并播报**账户余额变化**。
 
+## 安装前提（重要）
+
+- 用 `github:` 地址安装时，**本机必须装有 git** —— pnpm 需要用 `git ls-remote` 解析 ref，缺 git 会直接安装失败。
+- 用 npm 包名安装（`install_bundle dsh-deepseek-pet`）不需要 git，但**该包目前尚未发布到 npm**，所以现阶段请用下面的 GitHub 方式安装。
 ## 系统要求
 - **Windows 10 / 11**（本插件是原生 WPF 程序，**不支持 macOS / Linux**）
 - **.NET Framework 4.x**（Win10/11 自带；若缺失可从微软官网安装）
