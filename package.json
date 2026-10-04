@@ -1,5 +1,5 @@
 {
-  "name": "dsh-deepseek-pet",
+  "name": "@deepseekstudio/dsh-deepseek-pet",
   "version": "0.2.3",
   "license": "MIT",
   "author": "Yoshino-JF",

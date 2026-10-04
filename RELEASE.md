@@ -27,7 +27,7 @@ plugin_manager install_bundle github:Yoshino-JF/dsh-deepseek-pet
 ```
 **方式 C：npm 安装（发布到 npm 之后）**
 ```
-plugin_manager install_bundle dsh-deepseek-pet
+plugin_manager install_bundle @deepseekstudio/dsh-deepseek-pet
 ```
 安装成功的标志（工具输出）：`stage: enable` / `application: applied`，并且 pnpm 输出里出现 `+ <包名> file:...`。
 
