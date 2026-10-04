@@ -1,0 +1,109 @@
+name: Publish to npm
+
+# 通过 GitHub OIDC 身份向 npm 发布（Trusted Publishing）——
+# 不需要任何 npm token、不需要 OTP、不需要账号开启 2FA。
+#
+# 触发方式（二选一）：
+#   1) 推送形如 v0.2.6 的 tag  → 自动发布
+#   2) 手动触发并指定 tag      → 用于重跑某个已存在的 tag
+#
+# 前置（npm 侧一次性配置，见仓库文档）：
+#   包 Settings → Trusted Publisher → GitHub Actions
+#     Organization or user : Yoshino-JF
+#     Repository           : dsh-deepseek-pet
+#     Workflow filename    : publish.yml
+#     Environment name     : （留空）
+#     Allowed action       : 勾选 npm publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的已存在 tag（例如 v0.2.6）'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # OIDC 换取 npm 短期凭据所必需
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # 需要 npm >= 11.5.1 才支持 OIDC 可信发布
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # 故意不设置 NODE_AUTH_TOKEN —— npm 会自动识别 GitHub OIDC 上下文。
+      # 一旦设置 token，就会退回 token 发布路径，失去可信发布的意义。
+
+      - name: Report toolchain
+        run: |
+          node --version
+          npm --version
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${{ steps.ref.outputs.tag }}"
+          PKG="v$(node -p "require('./package.json').version")"
+          echo "tag=$TAG  package.json=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag ($TAG) 与 package.json 版本 ($PKG) 不一致，拒绝发布"
+            exit 1
+          fi
+
+      - name: Verify bundle patch name matches package name
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          PATCH_NAME="$(grep -m1 -E "^[[:space:]]*name:" cordis.patch.yml | sed -E "s/.*name:[[:space:]]*'?([^'[:space:]]+)'?.*/\1/")"
+          echo "package.json=$PKG_NAME  cordis.patch.yml=$PATCH_NAME"
+          if [ "$PKG_NAME" != "$PATCH_NAME" ]; then
+            echo "::error::cordis.patch.yml 里的 name 与包名不一致 —— 这会导致插件 failed to import"
+            exit 1
+          fi
+
+      - name: Verify pet payload is present
+        run: |
+          test -f pet/DeepSeekPet.exe || { echo "::error::pet/DeepSeekPet.exe 缺失 —— GitHub 安装会缺桌宠本体"; exit 1; }
+          ls -l pet/DeepSeekPet.exe
+
+      - name: Publish
+        run: npm publish --access public
+
+      - name: Verify tarball is downloadable
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          SHORT="${PKG_NAME#@}"
+          SCOPE="${SHORT%%/*}"
+          BASE="${SHORT##*/}"
+          URL="https://registry.npmjs.org/${PKG_NAME}/-/${BASE}-${VERSION}.tgz"
+          echo "GET $URL"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' "$URL")"
+            echo "attempt $i -> HTTP $CODE"
+            [ "$CODE" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "::error::tarball 不可下载（0.2.4 曾死在这一步）"
+          exit 1
