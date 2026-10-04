@@ -20,7 +20,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 export const name = 'dsh-pet'
 export const inject = ['tools', 'credentials']
 
-const VERSION = '0.2.3'
+const VERSION = '0.2.4'
 
 const DEFAULTS = Object.freeze({
   port: 47831,
