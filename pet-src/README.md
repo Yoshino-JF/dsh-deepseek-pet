@@ -4,12 +4,12 @@
 由 DSH 插件从凭据库取 Key、查余额后经回环接口喂给它。
 
 - 桌宠本体：`build\DeepSeekPet.exe`（C# + WPF，纯 .NET Framework 4.x，**零第三方依赖**）
-- DSH 插件：`..\deepseek-pet-plugin`（bundle `@local/dsh-pet`，工具 `pet_balance` / `pet_control`）
+- DSH 插件：`..\deepseek-pet-plugin`（bundle `dsh-deepseek-pet`，工具 `pet_balance` / `pet_control`）
 - 素材：`assets\{idle,blink,happy,worry,sleepy}.png`（透明 PNG，含 5 种表情）
 - **版本与路线图**：见 [DEVLOG.md](DEVLOG.md)（当前 **v0.1.11**）
 
 ```
-DSH 宿主插件 (@local/dsh-pet)          桌宠 (DeepSeekPet.exe)
+DSH 宿主插件 (dsh-deepseek-pet)          桌宠 (DeepSeekPet.exe)
   ctx.credentials.resolve(DEEPSEEK_API_KEY)     │
   GET https://api.deepseek.com/user/balance     │  每 5 秒
   HTTP 127.0.0.1:47831/state ───────────────────┘  取余额 + 留言
@@ -230,7 +230,7 @@ pet-tools.exe info  idle.png
 | 改了插件 `index.js` 没生效 | 同包替换返回 `restart-required`，重启 DSH 后加载新世代 |
 | 双击 exe 没反应 | 单实例互斥：已经有一个在跑了（托盘里能找到） |
 | 端口被占用 | 改 `cordis.patch.yml` 的 `port`，同时改 `config.json` 的 `stateUrl` |
-| 想彻底卸载 | `plugin_manager remove_bundle @local/dsh-pet`；桌宠关掉托盘→退出，再删除本目录 |
+| 想彻底卸载 | `plugin_manager remove_bundle dsh-deepseek-pet`；桌宠关掉托盘→退出，再删除本目录 |
 
 ## 已知限制 / 下一步可做
 
