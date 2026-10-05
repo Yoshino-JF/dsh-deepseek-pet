@@ -56,6 +56,11 @@ DeepSeek 桌宠：一只悬浮在桌面上的鲸鱼女仆（WPF 原生窗口、�
 **Q：卸载插件后她还在？**
 默认她是常驻的（设计如此）。右键她 →「退出桌宠」即可；也可在插件设置里改成"随卸载关闭"。
 
+**Q：升级插件时报 `ERR_PNPM_EPERM`？**
+桌宠进程会锁住包目录。**先右键桌宠 →「退出桌宠」（或结束 DeepSeekPet 进程），再执行升级**，然后重启 DSH。
+
+**Q：安装时被拒，报 `YAMLException: bad indentation of a mapping entry`？**
+说明插件包内 `cordis.patch.yml` 的包名缺少引号（`@scope/name` 在 YAML 里是保留指示符，必须写成 `'@scope/name'`）。这是旧版本的已知缺陷，请升级到最新版。
 ## 隐私
 - 桌宠只与本机回环地址通信（插件提供的 `/state`）；**余额查询由插件在你的机器上发起**，桌宠本身不联网、不上传任何数据。
 - 除 `%APPDATA%\deepseek-pet\config.json`（窗口位置/大小等）与 `pet.log` 外，不写其它文件。
