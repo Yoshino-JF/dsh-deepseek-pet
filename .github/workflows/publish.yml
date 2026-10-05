@@ -72,15 +72,26 @@ jobs:
             exit 1
           fi
 
-      - name: Verify bundle patch name matches package name
+      - name: Verify bundle patch parses and name matches package name
         run: |
-          PKG_NAME="$(node -p "require('./package.json').name")"
-          PATCH_NAME="$(grep -m1 -E "^[[:space:]]*name:" cordis.patch.yml | sed -E "s/.*name:[[:space:]]*'?([^'[:space:]]+)'?.*/\1/")"
-          echo "package.json=$PKG_NAME  cordis.patch.yml=$PATCH_NAME"
-          if [ "$PKG_NAME" != "$PATCH_NAME" ]; then
-            echo "::error::cordis.patch.yml 里的 name 与包名不一致 —— 这会导致插件 failed to import"
-            exit 1
-          fi
+          node --input-type=module -e "
+          import fs from 'node:fs';
+          import { parse } from 'node:util';
+          const src = fs.readFileSync('cordis.patch.yml', 'utf8');
+          const doc = parse(src);                       // 真正用 YAML 解析，不是正则
+          const rows = Array.isArray(doc) ? doc.flatMap((r) => r.insert ?? []) : [];
+          const row = rows.find((r) => r && r.name);
+          if (!row) { console.error('::error::cordis.patch.yml 里找不到带 name 的 insert 行'); process.exit(1); }
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')).name;
+          console.log('package.json.name      = ' + pkg);
+          console.log('cordis.patch.yml.name  = ' + row.name);
+          if (pkg !== row.name) {
+            console.error('::error::二者不一致 —— 会导致插件 failed to import');
+            process.exit(1);
+          }
+          if (!row.name.startsWith('@')) return;
+          console.log('::notice::带 @ 的包名在 YAML 里必须加引号，已能解析，OK');
+          "
 
       - name: Verify pet payload is present
         run: |
@@ -95,15 +106,29 @@ jobs:
           PKG_NAME="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
           SHORT="${PKG_NAME#@}"
-          SCOPE="${SHORT%%/*}"
           BASE="${SHORT##*/}"
           URL="https://registry.npmjs.org/${PKG_NAME}/-/${BASE}-${VERSION}.tgz"
           echo "GET $URL"
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          # 实测：元数据提交是即时的，但 CDN 上架 tarball 存在明显延迟，
+          # 观测到的数值为 4~15 分钟（0.2.4 / 0.2.5 / 0.2.6 均如此）。
+          # 因此窗口设为 20 分钟，避免把「延迟」误判成「失败」。
+          for i in $(seq 1 20); do
             CODE="$(curl -s -o /dev/null -w '%{http_code}' "$URL")"
-            echo "attempt $i -> HTTP $CODE"
-            [ "$CODE" = "200" ] && exit 0
-            sleep 6
+            echo "attempt $i/20 ($(( i * 60 / 60 )) 分钟内) -> HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "tarball 已可下载 ✅"
+              exit 0
+            fi
+            sleep 60
           done
-          echo "::error::tarball 不可下载（0.2.4 曾死在这一步）"
+          echo "::error::tarball 在 20 分钟内仍不可下载（$URL）"
+          echo "::error::注意：此时 npm publish 通常已成功提交元数据，dist-tag 已指向本版本但 blob 缺失。"
+          echo "::error::处置：先把 dist-tag latest 退回上一个可用版本，再排查，切勿直接重复发布同版本号。"
           exit 1
+
+      - name: Warn if dist-tag points at a version whose tarball is missing
+        if: failure()
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "::warning::发布流程失败，请人工确认 $PKG_NAME@$VERSION 的 tarball 是否可下载，以及 dist-tags.latest 是否指向可用版本。"
