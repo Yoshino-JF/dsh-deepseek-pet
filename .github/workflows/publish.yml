@@ -72,13 +72,20 @@ jobs:
             exit 1
           fi
 
+      - name: Install YAML parser for the bundle-patch guard
+        # 这个守卫需要真正的 YAML 解析器。原先误写成 node:util 的 parse
+        # （那是解析 --key=value 命令行字符串的，且 ESM 下根本没有该导出），
+        # 导致本步骤必然在模块加载期失败 —— 任何 tag 都发不出去。
+        run: npm install --no-save --no-package-lock js-yaml
+
       - name: Verify bundle patch parses and name matches package name
         run: |
           node --input-type=module -e "
           import fs from 'node:fs';
-          import { parse } from 'node:util';
+          import { createRequire } from 'node:module';
+          const yaml = createRequire(import.meta.url)('js-yaml');
           const src = fs.readFileSync('cordis.patch.yml', 'utf8');
-          const doc = parse(src);                       // 真正用 YAML 解析，不是正则
+          const doc = yaml.load(src);                    // 真正用 YAML 解析，不是正则
           const rows = Array.isArray(doc) ? doc.flatMap((r) => r.insert ?? []) : [];
           const row = rows.find((r) => r && r.name);
           if (!row) { console.error('::error::cordis.patch.yml 里找不到带 name 的 insert 行'); process.exit(1); }
