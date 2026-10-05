@@ -20,7 +20,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 export const name = 'dsh-pet'
 export const inject = ['tools', 'credentials']
 
-const VERSION = '0.2.6'
+const VERSION = '0.2.7'
 
 const DEFAULTS = Object.freeze({
   port: 47831,
@@ -262,7 +262,9 @@ export function apply(ctx, config) {
   }
 
   function startPet() {
-    if (petRunning()) return { ok: true, status: 'already-running', pid: pet.proc.pid }
+    // petRunning() 为真有两种来源：我们自己 spawn 的进程，或"最近还在轮询"。
+    // 后者时 pet.proc 是 null，直接读 pet.proc.pid 会抛 TypeError —— 必须用 livePid()。
+    if (petRunning()) return { ok: true, status: 'already-running', pid: livePid() }
     const exe = String(cfg.petPath || '')
     if (!exe || !existsSync(exe)) {
       return { ok: false, status: 'missing', error: `找不到桌宠程序：${exe || '(未配置 petPath)'}` }
@@ -411,12 +413,20 @@ export function apply(ctx, config) {
   const timer = setInterval(() => { void refresh(false) }, ttlMs)
   ctx.effect(() => () => clearInterval(timer))
 
-  const boot = setTimeout(() => {
-    void refresh(true)
-    if (cfg.autoStart) {
+  // 自动启动必须整体包在 try/catch 里：这个回调跑在宿主启动的定时器上，
+  // 任何未捕获异常都会冒泡成 uncaughtException，直接把整个宿主进程打死（0.2.6 的真实故障）。
+  function autoStartPet() {
+    try {
       const r = startPet()
       if (!r.ok && r.status !== 'already-running') say(`自动启动桌宠未成功：${r.error}`)
+    } catch (err) {
+      say(`自动启动桌宠出错（已忽略，不影响宿主）：${err && err.message ? err.message : err}`)
     }
+  }
+
+  const boot = setTimeout(() => {
+    void refresh(true)
+    if (cfg.autoStart) autoStartPet()
   }, Math.max(0, Number(cfg.startDelayMs) || DEFAULTS.startDelayMs))
   ctx.effect(() => () => clearTimeout(boot))
 
