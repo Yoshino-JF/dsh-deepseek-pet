@@ -1,6 +1,6 @@
 {
   "name": "@deepseekstudio/dsh-deepseek-pet",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "license": "MIT",
   "author": "Yoshino-JF",
   "publishConfig": { "access": "public" },

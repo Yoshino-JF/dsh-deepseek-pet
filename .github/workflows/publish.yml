@@ -73,32 +73,16 @@ jobs:
           fi
 
       - name: Install YAML parser for the bundle-patch guard
-        # 这个守卫需要真正的 YAML 解析器。原先误写成 node:util 的 parse
-        # （那是解析 --key=value 命令行字符串的，且 ESM 下根本没有该导出），
-        # 导致本步骤必然在模块加载期失败 —— 任何 tag 都发不出去。
+        # 这个守卫需要真正的 YAML 解析器。
+        # 历史教训：最初误写成 node:util 的 parse（那是解析 --key=value 命令行
+        # 字符串的，且 ESM 下根本没有该导出）→ 守卫从未执行过，堵死了所有发布。
+        # 改用 js-yaml 后又把逻辑内联在 node -e 里，依赖 createRequire 在仓库根
+        # 解析，环境差异导致难以定位的失败。现在改为调用仓库内的
+        # validate-cordis-patch.mjs，解析交给 Node 标准规则，且失败时打印完整诊断。
         run: npm install --no-save --no-package-lock js-yaml
 
       - name: Verify bundle patch parses and name matches package name
-        run: |
-          node --input-type=module -e "
-          import fs from 'node:fs';
-          import { createRequire } from 'node:module';
-          const yaml = createRequire(import.meta.url)('js-yaml');
-          const src = fs.readFileSync('cordis.patch.yml', 'utf8');
-          const doc = yaml.load(src);                    // 真正用 YAML 解析，不是正则
-          const rows = Array.isArray(doc) ? doc.flatMap((r) => r.insert ?? []) : [];
-          const row = rows.find((r) => r && r.name);
-          if (!row) { console.error('::error::cordis.patch.yml 里找不到带 name 的 insert 行'); process.exit(1); }
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')).name;
-          console.log('package.json.name      = ' + pkg);
-          console.log('cordis.patch.yml.name  = ' + row.name);
-          if (pkg !== row.name) {
-            console.error('::error::二者不一致 —— 会导致插件 failed to import');
-            process.exit(1);
-          }
-          if (!row.name.startsWith('@')) return;
-          console.log('::notice::带 @ 的包名在 YAML 里必须加引号，已能解析，OK');
-          "
+        run: node validate-cordis-patch.mjs
 
       - name: Verify pet payload is present
         run: |
