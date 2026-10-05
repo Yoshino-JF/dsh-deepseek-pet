@@ -4,7 +4,7 @@
 # 想改端口/桌宠路径/刷新间隔时，改这里保存即可热生效（config 变更会重装该行）。
 - insert:
     - id: dsh-pet
-      name: @deepseekstudio/dsh-deepseek-pet
+      name: '@deepseekstudio/dsh-deepseek-pet'
       config:
         # 桌宠回环状态接口的端口（只监听 127.0.0.1）
         port: 47831

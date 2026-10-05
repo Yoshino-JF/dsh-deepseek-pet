@@ -174,8 +174,8 @@ namespace DeepSeekPet
     // ---------------- 主程序 ----------------
     public class PetApp
     {
-        /// <summary>桌宠版本号（与插件 @local/dsh-pet 的版本保持一致，见 DEVLOG.md）</summary>
-        public const string Version = "0.2.2";
+        /// <summary>桌宠版本号（与插件 @deepseekstudio/dsh-deepseek-pet 的版本保持一致，见 DEVLOG.md）</summary>
+        public const string Version = "0.2.6";
         /// <summary>开发用（--vnmood love|angry）：启动即演一次满好感/生气画面，便于验收截图</summary>
         public static string VnMood = "";
         /// <summary>开发用（--sidetest）：横版屏摆一个"血少+有食物+骷髅在射程"的局面，便于验收战斗</summary>
@@ -1472,9 +1472,8 @@ namespace DeepSeekPet
             MenuItem miLook = new MenuItem(); miLook.Header = "动画";
             miSway = new MenuItem(); miSway.Header = "摇摆呼吸"; miSway.IsCheckable = true; miSway.IsChecked = cfg.sway;
             miSway.Click += delegate { cfg.sway = miSway.IsChecked; StartAnimation(); cfg.Save(); };
-            miLook.Items.Add(miSway);
             // 「海底气泡」菜单项已删除（用户：脚底一圈泡泡观感不佳，整个功能废弃）
-            menu.Items.Add(miLook);
+            // 「动画」子菜单已移除（只含一项，用户要求不单开一层）
             // 扁平化：三个子菜单已直接挂到第一层（不再套 grpHer）
 
             MenuItem miScreen = new MenuItem(); miScreen.Header = "游戏屏"; string[] smodes = new string[] { "auto", "on", "off" };
@@ -1535,6 +1534,7 @@ namespace DeepSeekPet
             miBubbles.Header = "气泡特效";
             miBubbles.IsCheckable = true; miBubbles.IsChecked = cfg.bubbles;
             miBubbles.Click += delegate { cfg.bubbles = miBubbles.IsChecked; cfg.Save(); if (cfg.bubbles) bubbleNext = DateTime.MinValue; };
+            menu.Items.Add(miSway);            // 动效开关：摇摆呼吸 + 气泡特效放在一起（用户要求）
             menu.Items.Add(miBubbles);
 
             if (PetApp.DevMenu)   // 开发者项只在使用 --dev 启动时出现（普通用户看不到）
@@ -2154,7 +2154,7 @@ namespace DeepSeekPet
             walk(menu.Items);
             string[] requiredBase = new string[] {
                 "立即刷新余额", "显示余额徽章",
-                "让她做什么（状态）", "表情", "动画",
+                "让她做什么（状态）", "表情", "摇摆", "气泡特效",
                 "游戏屏", "招一只苦力怕（彩蛋）", "只看游戏屏（挂机模式）",
                 "大小", "回到右下角", "总在最前",
                 // 开发者项只在带 --dev 时要求存在（普通用户菜单里没有）
@@ -2170,7 +2170,21 @@ namespace DeepSeekPet
                 foreach (string h in all) if (h.StartsWith(r)) { found = true; break; }
                 if (!found) { missing++; PetConfig.Log("menutest: 缺菜单项 → " + r); }
             }
-            PetConfig.Log("menutest: 共 " + all.Count + " 项 · 关键项缺 " + missing + " · 空文字 " + emptyHeader);
+            // ---- 菜单项**有效性**自检（用户要求）：菜单项"在"不等于"有用" ----
+            // 逐个设置游戏屏三档，核对 screenVisible 是否符合预期（此前"关闭"点了没反应就是这类 bug）
+            string savedMode = cfg.screenMode;
+            bool savedVis = screenVisible;
+            string[] modes = new string[] { "on", "off", "auto" };
+            for (int mi2 = 0; mi2 < modes.Length; mi2++)
+            {
+                cfg.screenMode = modes[mi2];
+                UpdateScene();
+                bool expect = modes[mi2] == "on" ? true : (modes[mi2] == "off" ? false : screenVisible);
+                bool pass = modes[mi2] == "auto" ? true : (screenVisible == expect);
+                PetConfig.Log("menutest: 游戏屏=" + modes[mi2] + " → screenVisible=" + screenVisible + (pass ? " ✓" : " ✗ 不符合预期（菜单项无效）"));
+                if (!pass) missing++;
+            }
+            cfg.screenMode = savedMode; screenVisible = savedVis; UpdateScene();            PetConfig.Log("menutest: 共 " + all.Count + " 项 · 关键项缺 " + missing + " · 空文字 " + emptyHeader);
             Say(missing == 0 && emptyHeader == 0 ? "菜单自检通过～" : ("菜单自检：缺 " + missing + " 项，看日志"), 4);
         }
         /// <summary>
@@ -2809,7 +2823,11 @@ namespace DeepSeekPet
             // 场景轨迹写日志：这是排查「被叫去干活 → 关掉游戏」这类链路的主要依据
             PetConfig.Log("scene=" + next + " screenVisible=" + screenVisible + (next == prev ? " (same)" : ""));
             RefreshChipLabel();   // 场景变了→贴纸标签立即跟上（不等轮询）
-            bool wantScreen = cfg.screenOnly || (next == "gaming" || next == "interrupted");
+            // 屏幕显隐：**必须尊重菜单里的"游戏屏"三档**（自动/常开/关闭）——
+// 之前我把这里简化成"只看场景"，导致菜单那三项点了没反应（用户报的 bug）。
+                bool wantScreen = cfg.screenMode == "on" ? true
+                                : cfg.screenMode == "off" ? false
+                                : (cfg.screenOnly || next == "gaming" || next == "interrupted");
             if (next != "doze" && pose != "doze") moodHoldUntil = DateTime.MinValue;   // 离开打瞌睡就立刻恢复常规表情，避免残留
             // 手动锁定为"非掌机"姿态时不弹游戏屏（例如锁定"站着待机"却让场景机跑成 gaming）
             if (PetApp.PoseTest.Length > 0 && PetApp.PoseTest != "handheld") wantScreen = false;
