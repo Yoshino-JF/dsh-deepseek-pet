@@ -175,7 +175,7 @@ namespace DeepSeekPet
     public class PetApp
     {
         /// <summary>桌宠版本号（与插件 @deepseekstudio/dsh-deepseek-pet 的版本保持一致，见 DEVLOG.md）</summary>
-        public const string Version = "0.2.9";
+        public const string Version = "0.2.10";
         /// <summary>开发用（--vnmood love|angry）：启动即演一次满好感/生气画面，便于验收截图</summary>
         public static string VnMood = "";
         /// <summary>开发用（--sidetest）：横版屏摆一个"血少+有食物+骷髅在射程"的局面，便于验收战斗</summary>
@@ -286,7 +286,7 @@ namespace DeepSeekPet
         ScaleTransform tfScale;
         ContextMenu menu;
         MenuItem miBalance, miSway, miAuto, miTopmost;
-        DispatcherTimer pollTimer, blinkTimer, idleTimer;
+        DispatcherTimer pollTimer, blinkTimer, idleTimer, blinkResetTimer;
         readonly List<Particle> parts = new List<Particle>();
         DateTime animStart = DateTime.Now;
         DateTime bounceUntil = DateTime.MinValue;
@@ -1770,15 +1770,26 @@ namespace DeepSeekPet
             if (currentMood != "idle") return;
             if (!moods.ContainsKey("blink")) return;
             blinkBusy = true;
-            imgBlink.Source = moods["blink"];
-            DoubleAnimationUsingKeyFrames kf = new DoubleAnimationUsingKeyFrames();
-            kf.Duration = TimeSpan.FromMilliseconds(240);
-            kf.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(0))));
-            kf.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(60))));
-            kf.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(150))));
-            kf.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(240))));
-            kf.Completed += delegate { blinkBusy = false; };
-            imgBlink.BeginAnimation(UIElement.OpacityProperty, kf);
+            // 【眨眼：不做整层透明度动画】分层窗口（AllowsTransparency）里对整层跑 Opacity 关键帧时，
+            // WPF 每帧都要重算整窗 alpha → 用户实测：眨眼瞬间背景多出一道黑影。
+            // 素材本身没问题（blink.png 与 idle.png 同为 720x1090，平均亮度仅差 0.8）。
+            // 改为直接替换底图 Source：一次位图切换（无动画、无 alpha 重算），110ms 即闭眼睁眼。
+            ImageSource prevBlinkBase = imgBase.Source;
+            imgBase.Source = moods["blink"];
+            if (blinkResetTimer == null)
+            {
+                blinkResetTimer = new DispatcherTimer();
+                blinkResetTimer.Interval = TimeSpan.FromMilliseconds(110);
+                blinkResetTimer.Tick += delegate
+                {
+                    blinkResetTimer.Stop();
+                    // 只在仍是 idle 待机时还原，避免覆盖期间发生的姿态/表情切换
+                    if (pose == "idle" && currentMood == "idle" && prevBlinkBase != null) imgBase.Source = prevBlinkBase;
+                    blinkBusy = false;
+                };
+            }
+            blinkResetTimer.Stop();
+            blinkResetTimer.Start();
         }
 
         // ================= 姿态集（v0.2.0）=================
