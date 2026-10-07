@@ -548,6 +548,7 @@ namespace DeepSeekPet
             bubble.BeginAnimation(UIElement.OpacityProperty, null);
             bubble.Opacity = 0;
             bubble.Visibility = Visibility.Hidden;
+            SyncBubbleSize();   // 还回"气泡预留位"——否则屏幕会一直停在被上一句长台词顶高的位置 ✗
         }
 
         /// <summary>
@@ -3233,11 +3234,24 @@ namespace DeepSeekPet
             {
                 if (bubble == null || bubbleText == null || win == null) return;
                 if (bubble.Visibility == Visibility.Collapsed) return;
+                // 气泡没在显示 ⇒ **必须把预留位还回基准**：这一行决定"屏幕离她多远" ✗
+                // （用户实测的 bug：一句 200 字长句在 220 宽窗口里量出 217 DIP，之后哪怕她一声不吭，
+                //   屏幕也一直停在 217 DIP 远 —— 因为旧代码是"只升不降的高水位"）。
+                if (bubble.Visibility != Visibility.Visible || string.IsNullOrEmpty(bubbleText.Text))
+                {
+                    if (bubbleMinH <= 0.5) return;
+                    bubbleMinH = 0;
+                    PetConfig.Log("bubble row -> 0 DIP（气泡收起：预留位还回基准，屏幕落回原位）");
+                    ApplyLayout();
+                    return;
+                }
                 double availW = Math.Max(80, win.Width - bubble.Margin.Left - bubble.Margin.Right);
                 bubble.Measure(new Size(availW, double.PositiveInfinity));   // 按"可用宽度"量，才会得到真实换行高度
                 double need = Math.Min(220, bubble.DesiredSize.Height);      // 上限：再长的句子也不无限撑高窗口
                 if (need <= 1) return;
-                if (need <= bubbleMinH + 0.5) return;                        // 高水位：够了就不动（防抖动）
+                // ⚠ 这里必须**跟随当前需求**，不能只升不降：长句要撑高（否则被裁 ✗），但句子过去后要还回去。
+                // 同一句台词显示期间文本不变 ⇒ need 恒定 ⇒ 不会抖 ✓。
+                if (Math.Abs(need - bubbleMinH) < 0.5) return;
                 bubbleMinH = need;
                 PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
                     "bubble row -> {0:F0} DIP（窗口宽 {1:F0}，行高原 {2:F0}，字数 {3}）",
@@ -3323,6 +3337,7 @@ namespace DeepSeekPet
             {
                 if (mySeq != saySeq) return;      // 已被更新的台词取代 → 不要隐藏新气泡
                 bubble.Visibility = Visibility.Hidden; bubble.Opacity = 1;
+                SyncBubbleSize();                 // 台词播完 ⇒ 预留位还回基准（屏幕落回原位）
                 sayBusy = false;
                 if (sayQueue.Count > 0)   // 排队中的下一句（用户要求：多句依次播完，不互相覆盖）
                 {
