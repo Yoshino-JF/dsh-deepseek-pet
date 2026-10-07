@@ -204,7 +204,7 @@ namespace DeepSeekPet
     public class PetApp
     {
         /// <summary>桌宠版本号（与插件 @deepseekstudio/dsh-deepseek-pet 的版本保持一致，见 DEVLOG.md）</summary>
-        public const string Version = "0.2.12";
+        public const string Version = "0.2.13";
         /// <summary>开发用（--vnmood love|angry）：启动即演一次满好感/生气画面，便于验收截图</summary>
         public static string VnMood = "";
         /// <summary>开发用（--sidetest）：横版屏摆一个"血少+有食物+骷髅在射程"的局面，便于验收战斗</summary>
@@ -1132,7 +1132,10 @@ namespace DeepSeekPet
             bubble.BorderBrush = new SolidColorBrush(Color.FromArgb(255, 58, 106, 214));
             bubble.BorderThickness = new Thickness(1.6);
             bubble.Padding = new Thickness(12, 8, 12, 8);
-            bubble.Margin = new Thickness(6, 4, 6, 2);
+            // ⚠ 下边距是"气泡离她头发多远"：原来是 2 DIP —— 等于贴在头发上
+            // （用户反馈"这版有点挡头发"）。气泡在这一行的底部对齐，所以抬高就是加大下边距；
+            // 顺带注意 SyncBubbleSize 量的是含 Margin 的总高，抬高后所需行高也会跟着多 12 DIP ✓。
+            bubble.Margin = new Thickness(6, 4, 6, 14);
             bubble.VerticalAlignment = VerticalAlignment.Bottom;
             bubble.HorizontalAlignment = HorizontalAlignment.Center;
             bubble.MaxWidth = 320;
