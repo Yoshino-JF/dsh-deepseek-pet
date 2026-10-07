@@ -31,6 +31,8 @@ namespace DeepSeekPet
     {
         public string stateUrl = "http://127.0.0.1:47831/state";
         public double spriteWidth = 220;
+        /// <summary>游戏屏缩放倍率（0.5–2.0，1.0 = 原来的 240×160）。内部像素画布恒为 120×80，只缩放外层显示</summary>
+        public double screenScale = 1.0;
         public double x = -1;
         public double y = -1;
         public bool topmost = true;
@@ -54,6 +56,12 @@ namespace DeepSeekPet
         public double sleepIdleSeconds = 600;  // 无互动多久趴睡
         public double creeperChance = 0.08;    // 砍倒一棵树后被苦力怕炸的概率
         public bool screenOnly = false;        // 挂机模式：只留纯代码游戏屏，把她收起来（v0.2.0）
+        /// <summary>
+        /// 姿态/表情过渡时长（毫秒；0 = 直接切）。**这是"观感"与"开销"共用的旋钮**：
+        /// 桌宠是分层透明窗口，对整层做透明度动画时每帧都要重算整窗 alpha → 越长越柔和、也越吃帧
+        /// （0.2.11 因此把姿态过渡砍成 33+33ms，结果用户实测"过渡变得飞快"，见 DEVLOG ㉜⑦ / ㉝⑫）。
+        /// </summary>
+        public double transitionMs = 320;
 
         static string Dir
         {
@@ -79,6 +87,8 @@ namespace DeepSeekPet
                     PetConfig c = new PetConfig();
                     c.stateUrl = Str(d, "stateUrl", c.stateUrl);
                     c.spriteWidth = Num(d, "spriteWidth", c.spriteWidth);
+                    // 手改配置也要夹取：倍率越界会让窗口留不出地方（屏被裁）或大到离谱
+                    c.screenScale = ClampScale(Num(d, "screenScale", c.screenScale));
                     c.x = Num(d, "x", c.x);
                     c.y = Num(d, "y", c.y);
                     c.topmost = Bool(d, "topmost", c.topmost);
@@ -99,6 +109,8 @@ namespace DeepSeekPet
                     c.sleepIdleSeconds = Num(d, "sleepIdleSeconds", c.sleepIdleSeconds);
                     c.creeperChance = Num(d, "creeperChance", c.creeperChance);
                     c.screenOnly = Bool(d, "screenOnly", c.screenOnly); // 挂机模式
+                    // 过渡时长：手改配置也要夹取（0 保留 = 直接切；上限 800ms 免得手滑写出"一次过渡要一秒"）
+                    c.transitionMs = Math.Max(0, Math.Min(800, Num(d, "transitionMs", c.transitionMs)));
                     return c;
                 }
             }
@@ -108,10 +120,11 @@ namespace DeepSeekPet
 
         public void Save()
         {
+            if (NoSave) { Log("config save skipped (自检模式 NoSave)"); return; }
             try
             {
                 Dictionary<string, object> d = new Dictionary<string, object>();
-                d["stateUrl"] = stateUrl; d["spriteWidth"] = spriteWidth; d["x"] = x; d["y"] = y;
+                d["stateUrl"] = stateUrl; d["spriteWidth"] = spriteWidth; d["screenScale"] = screenScale; d["x"] = x; d["y"] = y;
                 d["topmost"] = topmost; d["showBalance"] = showBalance; d["particles"] = particles;
                 d["sway"] = sway; d["opacity"] = opacity; d["pollSeconds"] = pollSeconds;
                 d["longPollSeconds"] = longPollSeconds;
@@ -119,11 +132,26 @@ namespace DeepSeekPet
                 d["screenMode"] = screenMode; d["fps"] = fps;
                 d["sleepIdleSeconds"] = sleepIdleSeconds; d["creeperChance"] = creeperChance;
                 d["screenOnly"] = screenOnly;
+                d["transitionMs"] = transitionMs;
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 File.WriteAllText(PathFile, ser.Serialize(d), Encoding.UTF8);
             }
             catch (Exception ex) { Log("save config failed: " + ex.Message); }
         }
+
+        /// <summary>游戏屏倍率的唯一夹取点（配置读入 / 滚轮 / 菜单 / 开发自检都走它），顺带去掉浮点误差</summary>
+        public static double ClampScale(double s)
+        {
+            if (double.IsNaN(s) || double.IsInfinity(s)) return 1.0;
+            return Math.Max(0.5, Math.Min(2.0, Math.Round(s, 2)));
+        }
+
+        /// <summary>
+        /// 开发自检期间禁止落盘（--zoomtest 等）：自检会把桌宠置于"游戏屏常开"等测试状态，
+        /// 而游戏逻辑里本来就有几处 cfg.Save()（例如进入游戏随机换画面时），
+        /// 不拦的话测试状态会被写进用户配置 —— 实测踩过一次（screenMode 被写成 on）。
+        /// </summary>
+        public static bool NoSave;
 
         public static void Log(string msg)
         {
@@ -176,7 +204,7 @@ namespace DeepSeekPet
     public class PetApp
     {
         /// <summary>桌宠版本号（与插件 @deepseekstudio/dsh-deepseek-pet 的版本保持一致，见 DEVLOG.md）</summary>
-        public const string Version = "0.2.11";
+        public const string Version = "0.2.12";
         /// <summary>开发用（--vnmood love|angry）：启动即演一次满好感/生气画面，便于验收截图</summary>
         public static string VnMood = "";
         /// <summary>开发用（--sidetest）：横版屏摆一个"血少+有食物+骷髅在射程"的局面，便于验收战斗</summary>
@@ -203,6 +231,10 @@ namespace DeepSeekPet
         public static bool UiTest;
         /// <summary>开发用（--menutest）：菜单树自检（关键项齐全、文字非空）</summary>
         public static bool MenuTest;
+        /// <summary>开发用（--zoomtest [倍率]）：无参＝把游戏屏缩放逐档走一遍并记录几何；带倍率＝固定到该档保持（供截图）</summary>
+        public static bool ZoomTest;
+        /// <summary>--zoomtest 的固定倍率（空 = 逐档自检）</summary>
+        public static string ZoomTestValue = "";
         /// <summary>开发用（--balancetest）：注入伪余额事件（扣费/低额/充值/失败）</summary>
         public static bool BalanceTest;
         /// <summary>开发用（--dev）：右键菜单里显示开发者选项（普通用户默认看不到）</summary>
@@ -211,6 +243,10 @@ namespace DeepSeekPet
         public static string AutoSceneTest = "";
         /// <summary>开发用（--beam on|off|debug）：调试投影光柱；debug = 实心洋红，用来确认几何到底画在哪</summary>
         public static string BeamTest = "";
+        /// <summary>开发用（--trans &lt;毫秒&gt;）：本机覆盖过渡时长并打开长帧统计（用来量不同时长下的帧开销）</summary>
+        public static bool TransProbe;
+        /// <summary>开发用（--usertest）：用真实菜单项点击走一遍「状态 × 大小」矩阵，每步核对布局不变量</summary>
+        public static bool UserTest;
 
         [STAThread]
         public static void Main(string[] args)
@@ -239,12 +275,25 @@ namespace DeepSeekPet
                     if (args[i] == "--posetest" && i + 1 < args.Length) PoseTest = args[i + 1];
                     if (args[i] == "--creepertest") CreeperTest = true;   // 开发用：启动 2.5s 后在她身边招一只苦力怕（不碰游戏屏）
                     if (args[i] == "--shutdowntest") ShutdownTest = true; // 开发用：启动 4s 后 gaming → idle，验证关游戏动画
-                    if (args[i] == "--scenetest") { SceneTest = true; if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) SceneTestMode = args[i + 1]; }
+                    if (args[i] == "--scenetest") { SceneTest = true; if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) SceneTestMode = args[i + 1]; PetConfig.NoSave = true; }
                     if (args[i] == "--autoscene" && i + 1 < args.Length) AutoSceneTest = args[i + 1];   // 开发用：直接置于某自动状态
                     if (args[i] == "--clicktest") ClickTest = true;                                      // 开发用：模拟单击她
                     if (args[i] == "--worktest") WorkTest = true;
                     if (args[i] == "--uitest") UiTest = true;
                     if (args[i] == "--menutest") MenuTest = true;
+                    if (args[i] == "--usertest") { UserTest = true; PetConfig.NoSave = true; }
+                    if (args[i] == "--zoomtest") { ZoomTest = true; if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) ZoomTestValue = args[i + 1]; }
+                    // 开发用（--trans <毫秒>）：本次运行覆盖过渡时长，不落盘（用于量不同时长下的帧开销）
+                    if (args[i] == "--trans" && i + 1 < args.Length)
+                    {
+                        double tv;
+                        if (double.TryParse(args[i + 1], NumberStyles.Any, CultureInfo.InvariantCulture, out tv))
+                            cfg.transitionMs = Math.Max(0, Math.Min(800, tv));
+                        TransProbe = true;
+                        // 量开销用的运行同样禁止落盘：场景切换链路里本来就有 cfg.Save()（SwitchScreen），
+                        // 不拦的话测试用的时长会被写进用户配置（实测踩到：transitionMs 被写成 560）
+                        PetConfig.NoSave = true;
+                    }
                     if (args[i] == "--balancetest") BalanceTest = true;                                        // 开发用：演一遍"被打断"完整链路
                     if (args[i] == "--dev") DevMenu = true;                                              // 显示开发者菜单项
                     if (args[i] == "--beam" && i + 1 < args.Length) BeamTest = args[i + 1];
@@ -358,6 +407,17 @@ namespace DeepSeekPet
         const double ScreenW = 240;    // 游戏屏显示尺寸（120×80 游戏像素 ×2，最近邻放大）
         const double ScreenH = 160;
         const double ScreenChrome = 20;// 游戏屏出现时额外占用的高度（边框 + 间距）
+        // ---- 游戏屏缩放（cfg.screenScale）----
+        // 设计：内部像素画布恒为 120×80、显示基准恒为 240×160，缩放**只作用在外层** ——
+        // 给 screenGrid 挂一个 LayoutTransform，屏里的所有东西（像素画 / HUD / galgame 立绘 /
+        // 中文台词 / 选项框 / 暂停条 / 白闪）一起等比放大，绝不会出现"屏变大了、字还那么小"的错配。
+        // LayoutTransform 同时参与布局与命中测试：窗口能正确留出地方，屏幕点击坐标也自动反算。
+        // 下面三个换算值只用于**布局占位**：凡几何处一律用它们，不要再直接写那三个常量。
+        // ⚠ 区分命名：本类的 ScaleTransform screenScale 是"开机/关屏动画"用的变换，与配置里的 cfg.screenScale（倍率）无关。
+        double ScW { get { return ScreenW * cfg.screenScale; } }
+        double ScH { get { return ScreenH * cfg.screenScale; } }
+        /// <summary>屏额外占用（边框 + 间距）随倍率等比；下限 16 保证小倍率时 6px 边框不被窗口裁掉</summary>
+        double ScChrome { get { return Math.Max(ScreenChrome * cfg.screenScale, 16); } }
         public static bool DebugMode = false;
         public static bool NoAnim, NoPoll, NoTray, NoMenu, NoSprite;
         public static bool OpaqueMode = false;
@@ -365,6 +425,14 @@ namespace DeepSeekPet
         // ---- 游戏屏与场景 ----
         IGameScreen mc;
         Border screenBezel;
+        Grid screenGrid;                 // 屏内容容器：缩放挂在它身上，屏内所有元素一起等比
+        ScaleTransform screenZoom;       // 上面那层缩放（LayoutTransform；与关屏动画的 screenScale 是两回事）
+        // 光柱当前几何（隐藏时为 0）：供 --zoomtest 记录"屏变大时，屏到她之间的距离与光柱有没有跟着变"
+        double beamYTop, beamYBot, beamTopW;
+        // 余额徽章所需的窗口宽度下限（由 SyncChipWidth 量出来；0 = 不显示徽章）
+        double chipMinWidth;
+        // 气泡（对话框）所需的高度下限（高水位，由 SyncBubbleSize 量出来；长句换行后会超过 BubbleRow）
+        double bubbleMinH;
         // 注：书桌场景模式（假背景 / 前景桌面 / 代码画的桌沿键鼠条）与一体化补丁帧
         //（键鼠按下帧、表情差分帧、开发验收开关）已在本次清理中整体移除，含其全部字段与素材加载。
         Border screenCharHost;
@@ -871,6 +939,9 @@ namespace DeepSeekPet
             mc.CreeperChance = cfg.creeperChance;
             screenImage = new Image();
             screenImage.Source = mc.Source;
+            // ⚠ 这两个尺寸**永远是 240×160**（＝120×80 像素画布 ×2），不要乘以 cfg.screenScale：
+            // 缩放在外层（screenGrid.LayoutTransform）统一做，这里保持原尺寸才能让屏幕点击的
+            // 归一化坐标（GetPosition(screenImage)/ActualWidth）始终落在 120×80 的游戏像素空间里。
             screenImage.Width = ScreenW;
             screenImage.Height = ScreenH;
             screenImage.Stretch = Stretch.Fill;
@@ -894,11 +965,11 @@ namespace DeepSeekPet
             screenSubText.VerticalAlignment = VerticalAlignment.Bottom;
             screenSubText.Margin = new Thickness(0, 0, 0, 8);
             screenSubText.Visibility = Visibility.Collapsed;
-            Grid screenGrid = new Grid();
+            screenGrid = new Grid();   // 屏内容容器（字段：缩放要挂在它身上）
             // 背景图层放在最底下：像素屏里 alpha=0 的地方就会透出这张背景（galgame 用的就是这条路）
             screenBg = new Image();
             screenBg.Stretch = Stretch.Fill;
-            screenBg.Width = ScreenW;
+            screenBg.Width = ScreenW;      // 同上：保持基准尺寸，缩放交给 screenGrid
             screenBg.Height = ScreenH;
             screenBg.IsHitTestVisible = false;
             screenBg.Visibility = Visibility.Collapsed;
@@ -1014,6 +1085,10 @@ namespace DeepSeekPet
             screenBezel.ToolTip = "单击换游戏 · 双击场景区：MC 招苦力怕 / galgame 切下一位角色 · galgame 可直接点选项";
             screenBezel.Effect = new DropShadowEffect { BlurRadius = 18, ShadowDepth = 4, Opacity = 0.45, Color = Colors.Black };
             screenBezel.Child = screenGrid;
+            // 游戏屏缩放的**唯一落点**：LayoutTransform 参与布局（窗口据此留出地方、点击坐标自动反算），
+            // 且屏内所有元素一起等比缩放。倍率的实际同步在 ApplyLayout 里做（所有改布局的入口都会经过它）。
+            screenZoom = new ScaleTransform(1, 1);
+            screenGrid.LayoutTransform = screenZoom;
             // 收屏动画用的变换（RenderTransform 不参与布局，所以不会引起窗口尺寸跳动）
             screenScale = new ScaleTransform(1, 1);
             screenShake = new TranslateTransform(0, 0);
@@ -1073,6 +1148,9 @@ namespace DeepSeekPet
             bubble.Child = bubbleText;
             Grid.SetRow(bubble, 1);
             root.Children.Add(bubble);
+            // 长句换行后气泡会比固定行高（BubbleRow=88）更高，被排成 82 高 → 后半截被 TextBlock 裁掉
+            // （实测：45 字要 125 DIP ✗）。尺寸一变就同步高水位，见 SyncBubbleSize()。
+            bubble.SizeChanged += delegate { SyncBubbleSize(); };
 
             // --- 立绘 ---
             // --- 掌机 → 游戏屏的投影光柱（纯代码特效；只在"她拿掌机 + 游戏屏可见"时出现）---
@@ -1221,6 +1299,9 @@ namespace DeepSeekPet
             Grid.SetRow(chip, 3);
             root.Children.Add(chip);
             chip.Visibility = cfg.showBalance ? Visibility.Visible : Visibility.Collapsed;
+            // 徽章文案（"深度思考中 余额 ¥92.60"这类）比窗口还宽时会被裁掉 —— 它不参与窗口公式，
+            // 所以量出来把窗口宽度下限顶上去：尺寸一变就同步（挂在 SizeChanged 上，覆盖所有改文案的地方）
+            chip.SizeChanged += delegate { SyncChipWidth(); };
 
             win.Content = root;
             LoadPoses();                              // 姿态集（assets\poses\，缺素材自动回退）
@@ -1239,6 +1320,14 @@ namespace DeepSeekPet
             if (cfg.screenOnly) ApplyScreenOnly();
             if (PetApp.PoseTest.Length > 0) SetPose(PetApp.PoseTest, true);
             if (PetApp.MenuTest) CheckMenu();
+            if (PetApp.ZoomTest) RunZoomTest();
+            if (PetApp.UserTest)      // 用户路径回归：真实菜单项点击 × 状态/大小矩阵
+            {
+                DispatcherTimer ut2 = new DispatcherTimer();
+                ut2.Interval = TimeSpan.FromMilliseconds(1500);   // 等窗口稳定再开始点
+                ut2.Tick += delegate { ut2.Stop(); RunUserTest(); };
+                ut2.Start();
+            }
             if (PetApp.BalanceTest) RunBalanceTest();   // 余额事件注入（--balancetest）   // 菜单自检（--menutest）
             if (PetApp.UiTest)        // 开发验收：按"用户操作"序列跑全量回归
             {
@@ -1360,7 +1449,10 @@ namespace DeepSeekPet
         void ApplyPosition()
         {
             Rect wa = SystemParameters.WorkArea;
-            if (cfg.x < 0 || cfg.y < 0 || cfg.x > wa.Right - 40 || cfg.y > wa.Bottom - 40)
+            // ⚠ 只有"-1/-1 ＝ 未设置"这个哨兵该复位。**负坐标是合法的**：她可以被拖到屏幕左/上边缘外一点
+            // （实测用户把她拖到 x=-60.8 之后被判成"未设置"，下次启动直接跳回右下角）。
+            bool unset = Math.Abs(cfg.x + 1) < 0.001 && Math.Abs(cfg.y + 1) < 0.001;
+            if (unset || cfg.x > wa.Right - 40 || cfg.y > wa.Bottom - 40)
             {
                 cfg.x = wa.Right - win.Width - 40;
                 cfg.y = wa.Bottom - win.Height - 10;
@@ -1386,7 +1478,7 @@ namespace DeepSeekPet
             grpBalance.Items.Add(miRefresh);
 
             miBalance = new MenuItem(); miBalance.Header = "显示余额徽章"; miBalance.IsCheckable = true; miBalance.IsChecked = cfg.showBalance;
-            miBalance.Click += delegate { cfg.showBalance = miBalance.IsChecked; chip.Visibility = cfg.showBalance ? Visibility.Visible : Visibility.Collapsed; cfg.Save(); };
+            miBalance.Click += delegate { cfg.showBalance = miBalance.IsChecked; chip.Visibility = cfg.showBalance ? Visibility.Visible : Visibility.Collapsed; SyncChipWidth(); cfg.Save(); };
             grpBalance.Items.Add(miBalance);
             menu.Items.Add(grpBalance);
 
@@ -1407,6 +1499,7 @@ namespace DeepSeekPet
                     MenuItem m = (MenuItem)s;
                     string v = Convert.ToString(m.Tag);
                     PetApp.PoseTest = v;                       // 复用 PoseTest：非空时锁死该姿态
+                    PetConfig.Log("state menu -> [" + (v.Length == 0 ? "自动" : v) + "]");
                     if (miAuto != null) miAuto.IsChecked = (v == "");
                     foreach (MenuItem other in ((MenuItem)m.Parent).Items)
                         if (other != m && other.IsCheckable) other.IsChecked = (Convert.ToString(other.Tag) == v);
@@ -1496,6 +1589,7 @@ namespace DeepSeekPet
                     foreach (object o in miScreen.Items) { MenuItem mm = o as MenuItem; if (mm != null) mm.IsChecked = (mm == m); }
                     cfg.Save();
                     UpdateScene();
+                    UpdateScreenVisibility();   // 场景没变时也要让"关闭/常开"立刻生效（见方法注释）
                 };
                 miScreen.Items.Add(mi);
             }
@@ -1538,6 +1632,60 @@ namespace DeepSeekPet
             miBubbles.Header = "气泡特效";
             miBubbles.IsCheckable = true; miBubbles.IsChecked = cfg.bubbles;
             miBubbles.Click += delegate { cfg.bubbles = miBubbles.IsChecked; cfg.Save(); if (cfg.bubbles) bubbleNext = DateTime.MinValue; };
+            // ---- 游戏屏大小（预设档）----
+            // 为什么除了滚轮还给菜单：滚轮要"鼠标正好悬在游戏屏上"才生效，不好发现；
+            // 屏大小是"看着调"的东西，菜单里给几档最直观（在屏上滚轮仍可无级调 0.5–2.0）。
+            MenuItem miZoom = new MenuItem(); miZoom.Header = "游戏屏大小";
+            double[] zoomVals = new double[] { 0.6, 0.8, 1.0, 1.2, 1.5 };
+            string[] zoomNames = new string[] { "60%（最小）", "80%", "100%（默认）", "120%", "150%（最大）" };
+            MenuItem[] zoomItems = new MenuItem[zoomVals.Length];
+            for (int gi = 0; gi < zoomVals.Length; gi++)
+            {
+                MenuItem itz = new MenuItem(); itz.Header = zoomNames[gi]; itz.IsCheckable = true;
+                zoomItems[gi] = itz;
+                double v = zoomVals[gi];
+                int idx = gi;   // ⚠ 必须另存一份：for 的循环变量被所有闭包共享，直接用 gi 会全判成"最后一项"（性能档位那组踩过）
+                itz.Click += delegate
+                {
+                    for (int k = 0; k < zoomItems.Length; k++) zoomItems[k].IsChecked = (k == idx);
+                    SetScreenScale(v);
+                };
+                miZoom.Items.Add(itz);
+            }
+            miZoom.SubmenuOpened += delegate
+            {
+                for (int k = 0; k < zoomVals.Length; k++) zoomItems[k].IsChecked = Math.Abs(zoomVals[k] - cfg.screenScale) < 0.001;
+            };
+            menu.Items.Add(miZoom);
+
+            // ---- 过渡速度（姿态/表情淡入淡出的时长）----
+            // 为什么做成菜单：这个值同时决定"观感"与"开销" —— 桌宠是分层透明窗口，对整层做透明度
+            // 动画时每帧都要重算整窗 alpha，所以"越长越柔和、也越吃帧"。0.2.11 为了消卡顿把它写死成
+            // 33+33ms，结果用户实测"过渡变得飞快"（见 DEVLOG ㉜⑦ / ㉝⑫）→ 现在交回用户手里。
+            MenuItem miTrans = new MenuItem(); miTrans.Header = "过渡速度";
+            double[] trVals = new double[] { 0, 66, 160, 320, 560 };
+            string[] trNames = new string[] { "关闭（直接切）", "极速 66ms（0.2.11 手感）", "快 160ms", "标准 320ms（默认）", "柔和 560ms" };
+            MenuItem[] trItems = new MenuItem[trVals.Length];
+            for (int ti = 0; ti < trVals.Length; ti++)
+            {
+                MenuItem itt = new MenuItem(); itt.Header = trNames[ti]; itt.IsCheckable = true;
+                trItems[ti] = itt;
+                double v = trVals[ti];
+                int tidx = ti;   // 同上：循环变量不能直接进闭包
+                itt.Click += delegate
+                {
+                    for (int k = 0; k < trItems.Length; k++) trItems[k].IsChecked = (k == tidx);
+                    cfg.transitionMs = v; cfg.Save();
+                    PetConfig.Log("transitionMs -> " + v.ToString("F0", CultureInfo.InvariantCulture));
+                };
+                miTrans.Items.Add(itt);
+            }
+            miTrans.SubmenuOpened += delegate
+            {
+                for (int k = 0; k < trVals.Length; k++) trItems[k].IsChecked = Math.Abs(trVals[k] - cfg.transitionMs) < 0.001;
+            };
+            menu.Items.Add(miTrans);
+
             // ---- 性能档位（30/60/120/自动跟随屏幕）----
             // 动画全部基于 dt（正弦按墙钟、游戏按 dt 积分），所以限帧只影响平滑度与 CPU，不改变动作速度。
             // 注意：WPF 的 MenuItem 没有单选组（IsCheckable 只是独立复选框），必须手动互斥。
@@ -1550,11 +1698,12 @@ namespace DeepSeekPet
                 MenuItem it = new MenuItem(); it.Header = fpsNames[fi]; it.IsCheckable = true;
                 fpsItems[fi] = it;
                 string v = fpsVals[fi];
+                int fidx = fi;   // 同上：循环变量不能直接进闭包，否则点任意一项都会把所有勾去掉
                 it.Click += delegate
                 {
                     cfg.fps = v;
                     // 手动互斥：勾中自己、取消其余（WPF 菜单项不提供单选组）
-                    for (int k = 0; k < fpsItems.Length; k++) fpsItems[k].IsChecked = (k == fi);
+                    for (int k = 0; k < fpsItems.Length; k++) fpsItems[k].IsChecked = (k == fidx);
                     ApplyFpsPreset(); cfg.Save();
                     PetConfig.Log("fps preset -> " + v);
                 };
@@ -1720,6 +1869,7 @@ namespace DeepSeekPet
         // ===== 待机动画驱动：跟 WPF 渲染帧（≈显示器刷新率），不再用固定间隔定时器 =====
         // IdleTick 内部全部基于墙钟时间（Math.Sin(t)），驱动变快只让它更顺，不改变动作速度。
         double idleDt = 1.0 / 60;
+        double idleDtMax;                   // 本统计窗口内的最大帧间隔：用来量"过渡/切换有没有卡一下"
         double fpsAccum = 0;   // 性能档位累加器
         static double FpsInterval(string mode)
         {
@@ -1736,13 +1886,14 @@ namespace DeepSeekPet
         }
         DateTime lastIdleFrame = DateTime.MinValue;
         int idleFrameCount = 0;
-        int idleFpsLogLeft = 8;   // 启动后打 8 条帧率日志便于验收，之后自动停止
+        int idleFpsLogLeft = PetApp.TransProbe ? 400 : 8;   // 启动后打 8 条帧率日志便于验收；--trans 量开销时全程统计
         void OnIdleFrame(object sender, EventArgs e)
         {
             DateTime now = DateTime.Now;
             idleDt = lastIdleFrame == DateTime.MinValue ? 1.0 / 60 : (now - lastIdleFrame).TotalSeconds;
             lastIdleFrame = now;
             if (idleDt > 0.1) idleDt = 0.1;      // 卡顿后钳制，避免动作跳步
+            if (idleDt > idleDtMax) idleDtMax = idleDt;   // 记窗口内最差的一帧（量过渡开销用）
             // 性能档位限帧：auto 不限；30/60/120 按目标间隔跳帧（idleDt 用累加值，速度不变）
             fpsAccum += idleDt;
             double fpsTarget = FpsInterval(cfg.fps);
@@ -1754,7 +1905,8 @@ namespace DeepSeekPet
             if (++idleFrameCount >= 60 && idleFpsLogLeft > 0)
             {
                 idleFpsLogLeft--; idleFrameCount = 0;
-                PetConfig.Log(string.Format("idlefps: 最近一帧 dt={0:F1}ms（≈{1:F0}fps，pose={2}）", idleDt * 1000, 1.0 / Math.Max(0.0001, idleDt), pose));
+                PetConfig.Log(string.Format("idlefps: 最近一帧 dt={0:F1}ms（≈{1:F0}fps，本窗口最大 {2:F0}ms，pose={3}）", idleDt * 1000, 1.0 / Math.Max(0.0001, idleDt), idleDtMax * 1000, pose));
+                idleDtMax = 0;
             }
         }
 
@@ -2039,11 +2191,18 @@ namespace DeepSeekPet
                 moods.TryGetValue(m, out want);
             }
             SetSpriteNaturalSize();
-            int ms = nextFadeMs > 0 ? nextFadeMs : (animate ? 320 : 0);
+            int ms = nextFadeMs > 0 ? nextFadeMs : (animate ? (int)cfg.transitionMs : 0);
             nextFadeMs = 0;
-            // 只做 2 帧过渡（≈33ms）：分层窗口里透明度动画每帧都要重算整窗 alpha，
-            // 原来的 160ms+ 慢淡会明显"卡一下"（用户实测）。2 帧足够读出"淡出→换图→淡入"的观感。
-            if (ms > 0) FadeThroughTo(want, 33, 33); else CrossFadeTo(want, 0);
+            // 过渡时长统一由 cfg.transitionMs 决定（默认 320ms，与表情交叉淡入一致）。
+            // ⚠ 0.2.11 这里写死成 2 帧（33+33ms）—— 那是为了消掉分层窗口的透明度动画卡顿，
+            // 但砍过了头：用户实测"过渡变得飞快"（表情淡入还是 320ms，姿态却是 66ms，两者差 5 倍）。
+            // 现在仍保持"淡出 → 换图 → 淡入"两段，只是把每段拉回肉眼舒服的长度，并且可调。
+            if (ms > 0)
+            {
+                int outMs = Math.Max(16, ms / 2), inMs = Math.Max(16, ms - outMs);
+                FadeThroughTo(want, outMs, inMs);
+            }
+            else CrossFadeTo(want, 0);
         }
 
         /// <summary>场景 → 姿态：gaming=拿掌机玩、doze=打瞌睡、work=盘腿冥想（深度求索）、其余=站立待机</summary>
@@ -2183,6 +2342,199 @@ namespace DeepSeekPet
         /// 覆盖：单击 / 点屏幕换游戏 / 置于四态 / 打断演出 / 滚轮缩放 / 招苦力怕彩蛋。
         /// 每步 3.5 秒并写日志；跑完用日志核对每一步的场景数、姿态与台词。
         /// </summary>
+        /// <summary>
+        /// 开发验收（--usertest）：**用真实菜单项点击**走一遍「状态 × 大小」矩阵，每步之后核对布局不变量。
+        /// 与 --uitest 的区别：--uitest 直接调处理函数（测不到菜单装配、互斥、勾选），这里点的是**菜单项本身**
+        /// （`RaiseEvent(MenuItem.ClickEvent)` 走的正是用户点击那条 handler ✓），滚轮部分仍只能驱动决策点
+        /// `OnWheelAt`（合成滚轮事件的坐标取的是本机真实光标 —— 不挪用户的鼠标）。
+        /// 全程 NoSave，结束时把用户配置原样还原。
+        /// </summary>
+        void RunUserTest()
+        {
+            bool savedNoSave = PetConfig.NoSave;
+            PetConfig.NoSave = true;
+            double svScale = cfg.screenScale, svSprite = cfg.spriteWidth;
+            utSavedSprite = svSprite;
+            string svMode = cfg.screenMode, svFps = cfg.fps, svPose = PetApp.PoseTest;
+            double svTrans = cfg.transitionMs;
+            bool svOnly = cfg.screenOnly, svChip = cfg.showBalance;
+
+            string[] steps = new string[] {
+                // ⓪ 先把游戏屏设回"自动"，让后面状态步骤的期望是"纯"的
+                "screen:自动（久不互动就开玩）",
+                // ① 用户最常做的两件事交叉：切状态 × 改游戏屏大小（mode=auto：只有 gaming 才出屏）
+                "state:玩游戏|scr=1", "size:150%（最大）", "size:60%（最小）", "size:100%（默认）",
+                "state:待机|scr=0", "size:150%（最大）", "size:100%（默认）",
+                "state:打瞌睡|scr=0", "size:60%（最小）", "size:100%（默认）",
+                "state:冥想（深度求索）|scr=0", "size:150%（最大）", "size:100%（默认）",
+                "state:拎起来|scr=0", "state:自动|scr=0",
+                // ② 常开模式 × 状态：锁定到非掌机姿态时仍会收屏（SetScene 的规则），所以这两步期望"关"
+                "screen:常开", "state:待机|scr=0", "state:打瞌睡|scr=0", "state:玩游戏|scr=1",
+                // ③ 关闭模式 × 状态：屏应该始终不开
+                "screen:关闭", "state:玩游戏|scr=0",
+                "screen:自动（久不互动就开玩）", "state:自动|scr=0",
+                // ④ 过渡速度（姿态切换会真的用到它）
+                "trans:柔和 560ms", "state:玩游戏|scr=1", "trans:关闭（直接切）", "state:待机|scr=0",
+                "trans:标准 320ms（默认）",
+                // ⑤ 立绘大小的三个极值
+                "sprite:max", "sprite:min", "sprite:back",
+                // ⑥ 滚轮两义（屏上=缩屏 / 屏外=缩立绘）
+                "wheel:screen+", "wheel:screen+", "wheel:screen-", "wheel:sprite+", "wheel:sprite-",
+                "scale:1.0",
+                // ⑦ 开关类（挂机模式 / 余额徽章 / 性能档位）
+                "toggle:只看游戏屏（挂机模式）", "toggle:只看游戏屏（挂机模式）",
+                "toggle:显示余额徽章", "toggle:显示余额徽章",
+                "fps:30 帧（省电）", "fps:自动跟随屏幕（推荐）"
+            };
+            int i = 0, fail = 0, pass = 0;
+            DispatcherTimer t = new DispatcherTimer();
+            t.Interval = TimeSpan.FromMilliseconds(850);
+            t.Tick += delegate
+            {
+                if (i > 0)   // 先核对上一步（此时布局/过渡都已稳定）
+                {
+                    string bad = CheckLayoutInvariants();
+                    bool okScreen = true;
+                    if (expectScreen != null)
+                    {
+                        // 期望必须**照抄 SetScene 的既有规则**，否则测试会冤枉桌宠：
+                        // ① 手动锁定到非掌机姿态（待机/打瞌睡/冥想/拎起）→ 一定收屏（连"常开"也不弹）
+                        // ② 否则：常开 = 出屏、关闭 = 不出、自动 = 看场景（步骤里的 scr= 表达这个意图）
+                        bool want = expectScreen.Value;
+                        if (PetApp.PoseTest.Length > 0 && PetApp.PoseTest != "handheld") want = false;
+                        else if (cfg.screenMode == "on") want = true;
+                        else if (cfg.screenMode == "off") want = false;
+                        okScreen = (screenVisible == want);
+                    }
+                    if (stepActionFailed) bad = (bad.Length == 0 ? "" : bad + "；") + "步骤没能执行（菜单项缺失？）";
+                    if (bad.Length == 0 && okScreen) { pass++; PetConfig.Log("usertest: [" + (i - 1) + "] " + steps[i - 1] + " ✓"); }
+                    else
+                    {
+                        fail++;
+                        PetConfig.Log("usertest: [" + (i - 1) + "] " + steps[i - 1] + " ✗ "
+                            + (okScreen ? "" : ("screenVisible=" + screenVisible + " 期望=" + expectScreen.Value + " ")) + bad);
+                    }
+                    stepActionFailed = false;
+                }
+                if (i >= steps.Length)
+                {
+                    t.Stop();
+                    // 还原用户配置（内存 + 不落盘）
+                    cfg.screenScale = svScale; cfg.spriteWidth = svSprite; cfg.screenMode = svMode;
+                    cfg.fps = svFps; cfg.transitionMs = svTrans; cfg.screenOnly = svOnly; cfg.showBalance = svChip;
+                    PetApp.PoseTest = svPose;
+                    if (chip != null) chip.Visibility = cfg.showBalance ? Visibility.Visible : Visibility.Collapsed;
+                    ApplyScreenOnly(); ApplyLayout(); SyncChipWidth(); UpdateScene(); SetPose(PoseForScene(), false);
+                    PetConfig.Log("usertest: done · 通过 " + pass + " / 失败 " + fail + "（配置已还原）");
+                    PetConfig.NoSave = savedNoSave;
+                    return;
+                }
+                string s = steps[i];
+                PetConfig.Log("usertest: [" + i + "] 执行 " + s);
+                try { if (!RunUserStep(s)) { stepActionFailed = true; fail++; } }
+                catch (Exception ex) { PetConfig.Log("usertest step failed: " + s + " → " + ex.Message); stepActionFailed = true; fail++; }
+                i++;
+            };
+            t.Start();
+        }
+
+        bool? expectScreen;   // 当前步骤对 screenVisible 的期望（null = 不检查）
+        double utSavedSprite; // --usertest 开始前的立绘尺寸（sprite:back 用）
+        bool stepActionFailed;// 上一步"根本没点成"（菜单项缺失等）→ 必须算失败，不能静默通过
+
+        static bool ClickMi(MenuItem mi)
+        {
+            if (mi == null) return false;
+            // 走的是用户点击那条 handler（含 WPF 自己的 IsCheckable 切换 + 我们挂的 Click 逻辑）
+            mi.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            return true;
+        }
+
+        /// <summary>按**精确**标题在整个菜单树里找（含子菜单）；sub 非空时在它下面再找一层</summary>
+        MenuItem FindMi(string header, string sub)
+        {
+            if (menu == null) return null;
+            MenuItem parent = FindMiRec(menu.Items, header);
+            if (parent == null) { PetConfig.Log("usertest: 菜单项找不到 → " + header); return null; }
+            if (sub == null) return parent;
+            MenuItem child = FindMiRec(parent.Items, sub);
+            if (child == null) PetConfig.Log("usertest: 子菜单项找不到 → " + header + " / " + sub);
+            return child;
+        }
+
+        MenuItem FindMiRec(System.Windows.Controls.ItemCollection col, string header)
+        {
+            foreach (object o in col)
+            {
+                MenuItem mi = o as MenuItem;
+                if (mi == null) continue;
+                // ⚠ 必须精确匹配：`StartsWith("游戏屏")` 会先命中"游戏屏大小"，于是"常开"永远找不到 ✗（实测踩到）
+                if (Convert.ToString(mi.Header) == header) return mi;
+                if (mi.Items.Count > 0) { MenuItem hit = FindMiRec(mi.Items, header); if (hit != null) return hit; }
+            }
+            return null;
+        }
+
+        bool RunUserStep(string s)
+        {
+            expectScreen = null;
+            string[] parts = s.Split('|');
+            string cmd = parts[0];
+            foreach (string p in parts)
+                if (p.StartsWith("scr=")) expectScreen = (p == "scr=1");
+            if (cmd.StartsWith("state:")) return ClickMi(FindMi("让她做什么（状态）", cmd.Substring(6)));
+            if (cmd.StartsWith("size:")) return ClickMi(FindMi("游戏屏大小", cmd.Substring(5)));
+            if (cmd.StartsWith("trans:")) return ClickMi(FindMi("过渡速度", cmd.Substring(6)));
+            if (cmd.StartsWith("toggle:")) return ClickMi(FindMi(cmd.Substring(7), null));
+            if (cmd.StartsWith("fps:")) return ClickMi(FindMi("性能档位", cmd.Substring(4)));
+            if (cmd.StartsWith("screen:")) return ClickMi(FindMi("游戏屏", cmd.Substring(7)));
+            if (cmd == "sprite:max") { SetScale(460); return true; }
+            if (cmd == "sprite:min") { SetScale(70); return true; }
+            if (cmd == "sprite:back") { SetScale(utSavedSprite); return true; }   // 回到矩阵开始前的立绘尺寸
+            if (cmd.StartsWith("scale:")) { SetScreenScale(double.Parse(cmd.Substring(6), CultureInfo.InvariantCulture)); return true; }
+            if (cmd == "wheel:screen+") { OnWheelAt(true, 120); return true; }
+            if (cmd == "wheel:screen-") { OnWheelAt(true, -120); return true; }
+            if (cmd == "wheel:sprite+") { OnWheelAt(false, 120); return true; }
+            if (cmd == "wheel:sprite-") { OnWheelAt(false, -120); return true; }
+            PetConfig.Log("usertest: 未知步骤 " + s);
+            return false;
+        }
+
+        /// <summary>布局不变量：返回空串 = 全过；否则返回违背项（用于 --usertest 每步核对）</summary>
+        string CheckLayoutInvariants()
+        {
+            System.Collections.Generic.List<string> bad = new System.Collections.Generic.List<string>();
+            double s = cfg.screenScale;
+            if (screenZoom == null || Math.Abs(screenZoom.ScaleX - s) > 0.001 || Math.Abs(screenZoom.ScaleY - s) > 0.001)
+                bad.Add("屏缩放没落到外层");
+            double needW = ScreenW * s + 12, needH = ScreenH * s + 12;    // 6px 边框 ×2
+            if (screenBezel != null)
+            {
+                if (Math.Abs(screenBezel.ActualWidth - needW) > 1.5 || Math.Abs(screenBezel.ActualHeight - needH) > 1.5)
+                    bad.Add("屏尺寸=" + screenBezel.ActualWidth.ToString("F0") + "x" + screenBezel.ActualHeight.ToString("F0") + " 期望 " + needW.ToString("F0") + "x" + needH.ToString("F0"));
+                if (screenBezel.ActualWidth > win.Width + 0.5) bad.Add("屏比窗口宽");
+            }
+            if (screenImage != null && (Math.Abs(screenImage.ActualWidth - ScreenW) > 0.5 || Math.Abs(screenImage.ActualHeight - ScreenH) > 0.5))
+                bad.Add("基准画布被改（点击坐标会漂）");
+            double herNeed = cfg.spriteWidth * 1.52 + 10;
+            if (Math.Abs(RowActual(2) - herNeed) > 1.0) bad.Add("立绘行=" + RowActual(2).ToString("F0") + " 期望 " + herNeed.ToString("F0"));
+            if (chip != null && chip.Visibility == Visibility.Visible && chip.ActualWidth > 1)
+            {
+                chip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                if (chip.DesiredSize.Width > win.Width + 0.5) bad.Add("徽章被裁");
+            }
+            if (bubble != null && bubble.Visibility == Visibility.Visible)
+            {
+                double availW = Math.Max(80, win.Width - bubble.Margin.Left - bubble.Margin.Right);
+                bubble.Measure(new Size(availW, double.PositiveInfinity));
+                if (bubble.DesiredSize.Height > RowActual(1) + 0.5) bad.Add("气泡被裁");
+            }
+            double rowsSum = RowActual(0) + RowActual(1) + RowActual(2) + RowActual(3);
+            if (rowsSum > win.Height + 1.5) bad.Add("行总高超过窗口");
+            if (win.Width < 60 || win.Height < 60) bad.Add("窗口尺寸异常");
+            return bad.Count == 0 ? "" : string.Join("；", bad.ToArray());
+        }
+
         void RunUiTest()
         {
             string[] steps = new string[] {
@@ -2219,6 +2571,11 @@ namespace DeepSeekPet
         void CheckMenu()
         {
             if (menu == null) { PetConfig.Log("menutest: menu 未创建（可能带 --nomenu）"); return; }
+            // 自检期间禁止落盘：下面的"游戏屏三档"有效性检查会真的把 cfg.screenMode 置成 on/off 再跑 UpdateScene，
+            // 而进入游戏那条链路里本来就有 cfg.Save()（SwitchScreen 随机换画面）→ 不拦的话
+            // 自检结束会把 screenMode="on" 留在用户配置里（桌宠从此常开游戏屏，实测踩到过一次）。
+            bool savedNoSave = PetConfig.NoSave;
+            PetConfig.NoSave = true;
             System.Collections.Generic.List<string> all = new System.Collections.Generic.List<string>();
             int emptyHeader = 0;
             Action<System.Windows.Controls.ItemCollection> walk = null;
@@ -2239,6 +2596,7 @@ namespace DeepSeekPet
                 "立即刷新余额", "显示余额徽章",
                 "让她做什么（状态）", "表情", "摇摆", "气泡特效",
                 "游戏屏", "招一只苦力怕（彩蛋）", "只看游戏屏（挂机模式）",
+                "游戏屏大小", "性能档位", "过渡速度",
                 "大小", "回到右下角", "总在最前",
                 // 开发者项只在带 --dev 时要求存在（普通用户菜单里没有）
                 "退出桌宠"
@@ -2267,9 +2625,137 @@ namespace DeepSeekPet
                 PetConfig.Log("menutest: 游戏屏=" + modes[mi2] + " → screenVisible=" + screenVisible + (pass ? " ✓" : " ✗ 不符合预期（菜单项无效）"));
                 if (!pass) missing++;
             }
-            cfg.screenMode = savedMode; screenVisible = savedVis; UpdateScene();            PetConfig.Log("menutest: 共 " + all.Count + " 项 · 关键项缺 " + missing + " · 空文字 " + emptyHeader);
+            cfg.screenMode = savedMode; screenVisible = savedVis; UpdateScene();
+            // ---- 游戏屏大小的**有效性**自检：倍率有没有真的落到外层缩放上（"菜单项在"不等于"菜单项有用"）----
+            double savedScale0 = cfg.screenScale;
+            double[] zs = new double[] { 0.6, 1.0, 1.5 };
+            for (int zk = 0; zk < zs.Length; zk++)
+            {
+                SetScreenScale(zs[zk], false);          // save=false：自检不改用户配置
+                double got = screenZoom != null ? screenZoom.ScaleX : -1;
+                bool okz = Math.Abs(got - zs[zk]) < 0.001;
+                PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                    "menutest: 游戏屏大小={0:F2} → 屏缩放={1:F2}{2}", zs[zk], got,
+                    okz ? " ✓" : " ✗ 倍率没落到屏上（菜单项无效）"));
+                if (!okz) missing++;
+            }
+            SetScreenScale(savedScale0, false);
+            PetConfig.Log("menutest: 共 " + all.Count + " 项 · 关键项缺 " + missing + " · 空文字 " + emptyHeader);
             Say(missing == 0 && emptyHeader == 0 ? "菜单自检通过～" : ("菜单自检：缺 " + missing + " 项，看日志"), 4);
+            PetConfig.NoSave = savedNoSave;   // 自检结束，恢复正常落盘
         }
+        /// <summary>
+        /// 开发验收（--zoomtest）：把游戏屏缩放逐档真的设一遍，并把**布局跑完后的**几何写进日志。
+        /// 为什么需要：缩放动的是"布局占位"，代码看着对 ≠ 窗口留够了地方 —— 只有实测
+        /// bezel 实际尺寸 = 240×s + 12（边框）且窗口放得下，才算过。
+        /// 探针位置说明：几何在**下一次 tick**才读，读到的是布局完成后的值；改动当帧读到的是旧值
+        /// （上一轮 fps 探针就栽在"打在别的层"上，白花一轮）。
+        /// </summary>
+        void RunZoomTest()
+        {
+            PetConfig.NoSave = true;               // 自检全程不落盘（进入游戏那条链路里本来就有 cfg.Save()）
+            string savedMode = cfg.screenMode;
+            cfg.screenMode = "on";                 // 缩放只对可见的屏有意义 → 强制开屏
+            UpdateScene();
+            double fixedVal;
+            if (double.TryParse(PetApp.ZoomTestValue, NumberStyles.Any, CultureInfo.InvariantCulture, out fixedVal))
+            {
+                SetScreenScale(fixedVal, false);   // 固定档：保持不动，供截图与肉眼验收（不落盘）
+                PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                    "zoomtest: 固定 {0:F2} 保持（不落盘）", cfg.screenScale));
+                return;
+            }
+            double savedScale = cfg.screenScale;
+            double savedX = cfg.x, savedY = cfg.y;   // 放大时 KeepOnScreen 会挪窗口，自检结束后要还回去
+            double[] seq = new double[] { 1.0, 1.5, 2.0, 0.5, 0.6, 1.0 };
+            int i = 0;
+            DispatcherTimer zt = new DispatcherTimer();
+            zt.Interval = TimeSpan.FromMilliseconds(1400);
+            zt.Tick += delegate
+            {
+                if (i > 0) LogZoomGeometry("settled");
+                if (i >= seq.Length)
+                {
+                    zt.Stop();
+                    // 滚轮语义自检：直接驱动决策点，不依赖真实鼠标位置（合成滚轮事件里的坐标是本机光标）
+                    double w0 = cfg.spriteWidth;
+                    // ⚠ 期望值必须按**当前**倍率算，不能假设起始就是 1.0 —— 矩阵跑完停在 1.0，
+                    // 但用户配置可能是 0.6，于是"应该 +0.1"会被算成"savedScale+0.1"而误报 ✗（实测踩到）
+                    double s0 = cfg.screenScale;
+                    OnWheelAt(true, 120);
+                    double upScreen = cfg.screenScale;
+                    OnWheelAt(false, 120);
+                    double upSprite = cfg.spriteWidth;
+                    OnWheelAt(false, -120);
+                    PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                        "zoomtest: 滚轮 屏上+1档 {0:F2}→{1:F2}{2} · 屏外+1档 立绘 {3:F0}→{4:F0}{5} · 屏外-1档 立绘回 {6:F0}{7}",
+                        s0, upScreen, Math.Abs(upScreen - PetConfig.ClampScale(s0 + 0.1)) < 0.001 ? " ✓" : " ✗",
+                        w0, upSprite, Math.Abs(upSprite - (w0 + 18)) < 0.001 ? " ✓" : " ✗",
+                        cfg.spriteWidth, Math.Abs(cfg.spriteWidth - w0) < 0.001 ? " ✓" : " ✗"));
+                    // 还原：自检不许改用户配置（上面两次滚轮会各自 Save 一次，所以最后再落一次还原值）
+                    cfg.screenScale = savedScale; cfg.spriteWidth = w0; cfg.screenMode = savedMode;
+                    cfg.x = savedX; cfg.y = savedY;
+                    ApplyLayout(); ApplyPosition(); cfg.Save();
+                    PetConfig.Log("zoomtest: done（配置已还原）");
+                    return;
+                }
+                SetScreenScale(seq[i], false);
+                i++;
+            };
+            zt.Start();
+        }
+
+        /// <summary>记录一次"布局已稳定"的游戏屏几何，并核对倍率是否真的生效、窗口是否放得下</summary>
+        void LogZoomGeometry(string tag)
+        {
+            double s = cfg.screenScale;
+            double bezW = screenBezel != null ? screenBezel.ActualWidth : 0;
+            double bezH = screenBezel != null ? screenBezel.ActualHeight : 0;
+            double imgW = screenImage != null ? screenImage.ActualWidth : 0;
+            double imgH = screenImage != null ? screenImage.ActualHeight : 0;
+            double needW = ScreenW * s + 12, needH = ScreenH * s + 12;      // 边框 6px×2
+            bool sizeOk = Math.Abs(bezW - needW) < 1.5 && Math.Abs(bezH - needH) < 1.5;
+            bool fitOk = bezW <= win.Width + 0.5 && bezH + BubbleRow <= win.Height + 0.5;
+            bool baseOk = Math.Abs(imgW - ScreenW) < 0.5 && Math.Abs(imgH - ScreenH) < 0.5;   // 基准画布不变 → 点击坐标不漂
+            // 命中测试坐标自检：把屏内容中心从窗口坐标反算回 screenImage 自己的 240×160 坐标系，
+            // 必须正好落在 (120,80) —— 这一步同时证明"悬停判屏"（OverGameScreen）与"点击归一化"
+            //（OnScreenClick 的 GetPosition/ActualWidth）在**任意倍率**下都成立。
+            bool hitOk = false;
+            try
+            {
+                if (screenBezel != null && screenBezel.ActualWidth > 0 && screenBezel.ActualHeight > 0)
+                {
+                    Point c = screenBezel.TranslatePoint(
+                        new Point(screenBezel.ActualWidth / 2, screenBezel.ActualHeight / 2), screenImage);
+                    hitOk = Math.Abs(c.X - ScreenW / 2) < 1.5 && Math.Abs(c.Y - ScreenH / 2) < 1.5;
+                }
+            }
+            catch { }
+            // 屏到她之间的实测距离（屏行底边 → 立绘实际顶边）与光柱长度：用户反馈"屏变大了但这段距离
+            // 和光效没变"，所以把这两个量变成可核对的数字（立绘顶含透明边距，读数比肉眼看到的略大，看趋势即可）
+            double spriteTop = 0;
+            try { if (imgBase != null && imgBase.ActualHeight > 0) spriteTop = imgBase.TranslatePoint(new Point(0, 0), root).Y; }
+            catch { }
+            double gapNow = spriteTop - RowActual(0);
+            double beamLen = beamYBot > beamYTop ? beamYBot - beamYTop : 0;
+            // 余额徽章会不会被窗口裁掉（用户实测："余额没显示全"）
+            double chipNeed = 0;
+            bool chipOk = true;
+            if (chip != null && chip.Visibility == Visibility.Visible && chip.ActualWidth > 1)
+            {
+                chipNeed = chip.ActualWidth + chip.Margin.Left + chip.Margin.Right;
+                chipOk = win.Width >= chipNeed - 0.5;
+            }
+            PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                "zoomtest: {0} scale={1:F2} win={2:F0}x{3:F0} bezel={4:F0}x{5:F0}（期望 {6:F0}x{7:F0}）img={8:F0}x{9:F0} row0={10:F0} 间距={11:F0} 光柱长={12:F0} 顶宽={13:F0} | 立绘={14:F0}x{15:F0}@top{16:F0} row2={17:F0} row3={18:F0} 徽章={19:F0} {20}",
+                tag, s, win.Width, win.Height, bezW, bezH, needW, needH, imgW, imgH, RowActual(0),
+                gapNow, beamLen, beamTopW,
+                imgBase != null ? imgBase.ActualWidth : 0, imgBase != null ? imgBase.ActualHeight : 0, spriteTop,
+                RowActual(2), RowActual(3), chipNeed,
+                (sizeOk ? "尺寸✓" : "尺寸✗") + (fitOk ? " 放得下✓" : " 放不下✗") + (baseOk ? " 基准画布✓" : " 基准画布✗")
+                + (hitOk ? " 命中坐标✓" : " 命中坐标✗") + (chipOk ? " 徽章不裁✓" : " 徽章被裁✗")));
+        }
+
         /// <summary>
         /// 开发者（--balancetest）：**注入伪余额快照**跑一遍播报分支 —— 扣费 / 充值 / 低额 / 连接失败。
         /// 为什么需要：--uitest 走的是用户操作，测不到"余额变化"这条由轮询驱动的事件链。
@@ -2444,6 +2930,7 @@ namespace DeepSeekPet
                 + " imgH=" + (imgBase != null ? imgBase.ActualHeight.ToString("F0") : "-"));
             if (!show)
             {
+                beamYTop = beamYBot = beamTopW = 0;
                 // 光柱改成淡出（而不是瞬间消失）：与屏幕淡出同步，避免切换瞬间"闪两下"
                 if (beam != null && beam.Opacity > 0.05) FadeVis(beam, false, 260);
                 if (beamBack != null) beamBack.Visibility = Visibility.Collapsed;
@@ -2454,8 +2941,11 @@ namespace DeepSeekPet
             double w = win.Width > 0 ? win.Width : 276;
             double h = win.Height > 0 ? win.Height : 383;
             double cx = w / 2;
-            // 光柱顶端只到屏幕下沿（屏幕在光柱之上，所以不怕重叠，但保持不侵入）
-            double yTop = (screenVisible ? ScreenH + ScreenChrome : 0) - 2;
+            // 光柱顶端接到**屏幕行的实际底边**（旧写法用"预留值" ScH+ScChrome，它比实际底边多 6~24 DIP，
+            // 屏越大余量越大 → 光柱看起来"没接到屏上"，用户反馈的"光效没变"里也有这一条）。
+            // RowActual(0)=屏幕行的实际高度（含边框与下边距），减 2 让她贴在屏的下沿而不是压进屏幕。
+            double screenRowH = RowActual(0);
+            double yTop = (screenVisible ? (screenRowH > 1 ? screenRowH - 2 : ScH + ScChrome - 2) : -2);
             // 光柱根 = 掌机（设备）的上边缘：锚点用立绘实际尺寸换算，缩放/换姿态时幅度自动一致
             double yBot = h * 0.52, botW = 54, edgeX = 0, edgeW = 0;
             try
@@ -2479,7 +2969,8 @@ namespace DeepSeekPet
             // 渐变用绝对坐标跟着几何走：下端（掌机）最亮 → 上端（屏幕）淡出
             beamBrush.StartPoint = new Point(cx, yBot);
             beamBrush.EndPoint = new Point(cx, yTop);
-            double topW = Math.Min(w - 16, ScreenW - 26);
+            double topW = Math.Min(w - 16, ScW - 26);
+            beamYTop = yTop; beamYBot = yBot; beamTopW = topW;   // 记录给 --zoomtest 用（见字段注释）
             PointCollection pts = new PointCollection();
             pts.Add(new Point(cx - topW / 2, yTop));
             pts.Add(new Point(cx + topW / 2, yTop));
@@ -2638,7 +3129,8 @@ namespace DeepSeekPet
             if (!moods.ContainsKey(mood)) return;
             PetConfig.Log("mood=" + mood + " (was " + currentMood + ")");   // 表情审计：排查"表情来回切"
             BitmapImage next = moods[mood];
-            if (immediate)
+            int ms = (int)cfg.transitionMs;   // 与姿态过渡同一个旋钮（0 = 直接切）
+            if (immediate || ms <= 0)
             {
                 imgBase.BeginAnimation(UIElement.OpacityProperty, null);
                 imgBase.Opacity = 1;
@@ -2650,8 +3142,8 @@ namespace DeepSeekPet
             }
             imgFade.Source = next;
             string target = mood;
-            DoubleAnimation fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320));
-            DoubleAnimation fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(320));
+            DoubleAnimation fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(ms));
+            DoubleAnimation fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(ms));
             fadeIn.Completed += delegate
             {
                 // 只有在这次淡入仍是最新目标时才落地，避免连续切换时错帧
@@ -2725,6 +3217,63 @@ namespace DeepSeekPet
         /// 立即刷新贴纸的忙碌/游戏标签（不等轮询）—— 用户反馈：贴纸滞后于状态很多。
         /// 场景一变就调它，标签立刻跟上；离线的处理仍交给轮询路径。
         /// </summary>
+        /// <summary>
+        /// 气泡（对话框）的**高水位**：按当前窗口宽度换行后需要多高，就把它所在那一行（gapRow）顶到多高。
+        /// 为什么必须做：行高原来是固定 BubbleRow=88 ✓，但**余额播报这种长句**（45 字）在这里要 **125 DIP** ✗
+        /// → 气泡只被排到 82 高 → `TextBlock` 直接把它裁掉，用户看到的就是"对话框显示不全" ✓（实测数据见 DEVLOG ㉝⑭）。
+        /// 只升不降（高水位）：否则她每说一句长话、窗口与屏幕就上下跳一次 ✗（BubbleRow 这个固定预留本来就是这个用途）。
+        /// 宽度不用管：气泡是 `TextWrapping.Wrap`，多宽都能排下来，只需要高度。
+        /// </summary>
+        void SyncBubbleSize()
+        {
+            try
+            {
+                if (bubble == null || bubbleText == null || win == null) return;
+                if (bubble.Visibility == Visibility.Collapsed) return;
+                double availW = Math.Max(80, win.Width - bubble.Margin.Left - bubble.Margin.Right);
+                bubble.Measure(new Size(availW, double.PositiveInfinity));   // 按"可用宽度"量，才会得到真实换行高度
+                double need = Math.Min(220, bubble.DesiredSize.Height);      // 上限：再长的句子也不无限撑高窗口
+                if (need <= 1) return;
+                if (need <= bubbleMinH + 0.5) return;                        // 高水位：够了就不动（防抖动）
+                bubbleMinH = need;
+                PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                    "bubble row -> {0:F0} DIP（窗口宽 {1:F0}，行高原 {2:F0}，字数 {3}）",
+                    need, win.Width, RowActual(1), bubbleText.Text == null ? 0 : bubbleText.Text.Length));
+                ApplyLayout();
+            }
+            catch (Exception ex) { PetConfig.Log("bubble sync failed: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// 余额徽章的宽度不参与窗口公式（窗口只看立绘与游戏屏），所以文案一长就被裁：
+        /// 实测"立绘 142 + 屏 60%"时窗口只有 172 DIP，而「深度思考中 余额 ¥92.60」要 175+ ✗。
+        /// 做法：徽章自身尺寸一变（任何改文案的地方都会触发）就量一次，把窗口宽度下限顶上去；
+        /// 下限记在 chipMinWidth 里，ApplyLayout 每次也带上它 —— 场景切换 / 改倍率之后不会被重新裁掉。
+        /// 只加不减（同一文案下不会来回抖），关掉徽章时归零。
+        /// </summary>
+        void SyncChipWidth()
+        {
+            if (chip == null || win == null) return;
+            if (chip.Visibility != Visibility.Visible)
+            {
+                if (chipMinWidth > 0) { chipMinWidth = 0; ApplyLayout(); }   // 关掉徽章 → 允许窗口缩回去
+                return;
+            }
+            // ⚠ 必须量**不受约束的期望宽度**，不能用 ActualWidth —— 被窗口裁过的元素，它的 ActualWidth
+            // 就是"裁完之后"的宽度，于是永远量不出"需要多宽"，加宽逻辑一次都不会触发
+            // （第一版就是这么写的，实测复现：徽章依旧被裁 ✗）。DesiredSize 已含 Margin。
+            chip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double need = chip.DesiredSize.Width;
+            if (need <= 1) return;                          // 还没量出来
+            if (need <= chipMinWidth + 0.5) return;         // 现有下限够用 → 不动（防抖动）
+            chipMinWidth = need;
+            double oldW = win.Width;
+            ApplyLayout();
+            if (win.Width > oldW + 0.5)   // 只在下限真的把窗口顶宽时才记一行（否则日志会误导"每次都加宽"）
+                PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                    "chip width -> {0:F0} DIP（窗口 {1:F0} → {2:F0}）", need, oldW, win.Width));
+        }
+
         void RefreshChipLabel()
         {
             try
@@ -2839,20 +3388,43 @@ namespace DeepSeekPet
 
         void ApplyLayout()
         {
+            // 缩放同步放在布局里：所有改布局的入口（菜单 / 滚轮 / 场景切换 / 挂机模式 / 开发自检）
+            // 都会走到这里，就不会出现"改了倍率但屏没变"或"屏变了窗口没跟上"的半生效状态。
+            if (screenZoom != null)
+            {
+                double s = cfg.screenScale;
+                if (screenZoom.ScaleX != s) screenZoom.ScaleX = s;
+                if (screenZoom.ScaleY != s) screenZoom.ScaleY = s;
+            }
+            // ⚠ 立绘行（row2）必须**显式给高**，不能继续留成 star 行：立绘是 Uniform 自适应的，
+            // star 行会被它"吃满" —— 于是"窗口长高"只会让她变大，而**屏与她之间的距离恒等于气泡行高度**：
+            // 实测 1.0/1.5/2.0 档间距 81/85/77 DIP、光柱长 185/186/173（都不跟倍率走），
+            // 用户看到的就是"屏变大了，但到她那段距离和光效没变"。钉住立绘行后：
+            // 她的大小与位置只由 cfg.spriteWidth 决定，屏的倍率只改变"屏 + 屏与她之间的距离"。
+            double herRow = cfg.spriteWidth * 1.52 + 10;   // +10 = 立绘在行内的余量（实测 s=1 时行高 199 vs 立绘 188.5）
+            // 屏与她之间的距离：**随倍率等比**（s=1 时正好是原来的气泡行 88 DIP）
+            double gapRow = BubbleRow + Math.Max(0, BubbleRow * (cfg.screenScale - 1.0));
+            // 气泡（对话框）放得下优先：长句换行后可能比 BubbleRow 高（实测 45 字要 125 DIP），
+            // 这一行同时承担"屏↔她的距离"，所以气泡变高时屏幕会跟着上浮 —— 这正是"给她的话留位置"。
+            if (bubbleMinH > gapRow) gapRow = bubbleMinH;
             if (cfg.screenOnly)
             {
-                // 挂机模式：窗口只装得下游戏屏 + 气泡（她已收起）
-                win.Width = ScreenW + 28;
-                win.Height = (screenVisible ? ScreenH + ScreenChrome : 0) + BubbleRow + 40;
+                // 挂机模式：窗口只装得下游戏屏 + 气泡（她已收起）→ 立绘行归零、气泡行回基准，
+                // 否则这两行会把固定高度的窗口撑破（余额徽章被挤出窗口）
+                ((RowDefinition)root.RowDefinitions[1]).Height = new GridLength(BubbleRow, GridUnitType.Pixel);
+                ((RowDefinition)root.RowDefinitions[2]).Height = new GridLength(0, GridUnitType.Pixel);
+                win.Width = Math.Max(ScW + 28, chipMinWidth);
+                win.Height = (screenVisible ? ScH + ScChrome : 0) + Math.Max(BubbleRow, bubbleMinH) + 40;
                 return;
             }
-            double w = cfg.spriteWidth + 28;
-            double h = cfg.spriteWidth * 1.52 + BubbleRow + 40;
+            ((RowDefinition)root.RowDefinitions[1]).Height = new GridLength(gapRow, GridUnitType.Pixel);
+            ((RowDefinition)root.RowDefinitions[2]).Height = new GridLength(herRow, GridUnitType.Pixel);
             // 屏幕空间**始终预留**：场景切换不再改变窗口尺寸 → 无布局瞬变帧
-                w = Math.Max(w, ScreenW + 28);
-                h += ScreenH + ScreenChrome;
-            win.Width = w;
-            win.Height = h;
+            // （按倍率换算后的占位：屏本体 240×160 之外还要留 12px 边框 + 间距，见 ScW/ScChrome 注释）
+            win.Width = Math.Max(Math.Max(cfg.spriteWidth + 28, ScW + 28), chipMinWidth);
+            // 高度 = 屏 + 屏到她的距离 + 她 + 徽章行。前三项现在都是 Pixel 行，窗口必须把它们完整装下
+            // （旧写法靠 star 行吸收差额，钉住后若不算全，固定行会被挤出窗口底部）。
+            win.Height = ScH + ScChrome + gapRow + herRow + 40;
         }
 
         double RowActual(int i)
@@ -2895,34 +3467,54 @@ namespace DeepSeekPet
                 else if (sceneIdle >= cfg.gameIdleSeconds) next = "gaming";
                 else next = "idle";
             }
-            if (next != scene) SetScene(next);
+            if (next != scene)
+            {
+                // 场景机切状态的原因留痕：排查"她为什么自己变了状态"最有用的一行
+                PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                    "scene-auto: {0} -> {1}（idle={2:F0}s sceneIdle={3:F0}s mode={4} manual={5} poseTest={6} busy={7}）",
+                    scene, next, (DateTime.Now - lastUserAction).TotalSeconds, (DateTime.Now - lastSceneReset).TotalSeconds,
+                    cfg.screenMode, manualScene == null ? "-" : manualScene,
+                    PetApp.PoseTest.Length == 0 ? "-" : PetApp.PoseTest, DateTime.Now < busyUntil));
+                SetScene(next);
+            }
+        }
+
+        /// <summary>
+        /// 屏幕显隐的唯一计算点：尊重"游戏屏"三档（自动/常开/关闭）+ 姿态锁定。
+        /// ⚠ 必须能从 SetScene 的**提前返回之前**调用：以前这段写在 `if (next == prev) return;` 之后，
+        /// 于是"场景没变"时屏幕显隐根本不会重算 —— 用户实测到的是：
+        /// 把状态锁定成"玩游戏"之后，再把「游戏屏」改成**关闭**，屏幕照样开着 ✗（--usertest 抓到的真 bug）。
+        /// </summary>
+        void UpdateScreenVisibility()
+        {
+            bool wantScreen = cfg.screenMode == "on" ? true
+                            : cfg.screenMode == "off" ? false
+                            : (cfg.screenOnly || scene == "gaming" || scene == "interrupted");
+            // 手动锁定为"非掌机"姿态时不弹游戏屏（例如锁定"站着待机"却让场景机跑成 gaming）
+            if (PetApp.PoseTest.Length > 0 && PetApp.PoseTest != "handheld") wantScreen = false;
+            if (wantScreen == screenVisible) return;
+            // 只切屏幕显隐：**窗口尺寸/位置一律不动**（屏幕空间在 ApplyLayout 里始终预留），
+            // 所以这里不存在"布局瞬变帧" —— 立绘既不会被裁、也不需要隐藏（隐藏会让整个人闪一下）。
+            // 于是"震惊 → 冥想"这段过渡可以完整演出来（这正是用户提示的：把改动塞进已有过渡里）。
+            screenVisible = wantScreen;
+            FadeVis(screenBezel, wantScreen, 280);   // 淡入/淡出，而不是瞬间显隐（A 类突变）
+            if (wantScreen && mc != null) mc.Reset();
+            PetConfig.Log("screen " + (wantScreen ? "on" : "off") + "（mode=" + cfg.screenMode + " scene=" + scene
+                + " poseTest=" + (PetApp.PoseTest.Length == 0 ? "-" : PetApp.PoseTest) + "）");
         }
 
         void SetScene(string next)
         {
             string prev = scene;
             scene = next;
+            // ⚠ 屏幕显隐必须在**提前返回之前**重算（"游戏屏"三档/姿态锁定可能刚变，而场景也许没变）——
+            // 以前这段在后面，于是"状态锁定玩游戏 + 把游戏屏改成关闭"时屏幕照样开着 ✗（--usertest 抓到的真 bug）
+            UpdateScreenVisibility();
             if (next == prev) return;   // 场景未变：直接返回，避免重复播开机/关屏动画（用户报的"闪两次"）
             // 场景轨迹写日志：这是排查「被叫去干活 → 关掉游戏」这类链路的主要依据
             PetConfig.Log("scene=" + next + " screenVisible=" + screenVisible + (next == prev ? " (same)" : ""));
             RefreshChipLabel();   // 场景变了→贴纸标签立即跟上（不等轮询）
-            // 屏幕显隐：**必须尊重菜单里的"游戏屏"三档**（自动/常开/关闭）——
-// 之前我把这里简化成"只看场景"，导致菜单那三项点了没反应（用户报的 bug）。
-                bool wantScreen = cfg.screenMode == "on" ? true
-                                : cfg.screenMode == "off" ? false
-                                : (cfg.screenOnly || next == "gaming" || next == "interrupted");
             if (next != "doze" && pose != "doze") moodHoldUntil = DateTime.MinValue;   // 离开打瞌睡就立刻恢复常规表情，避免残留
-            // 手动锁定为"非掌机"姿态时不弹游戏屏（例如锁定"站着待机"却让场景机跑成 gaming）
-            if (PetApp.PoseTest.Length > 0 && PetApp.PoseTest != "handheld") wantScreen = false;
-            if (wantScreen != screenVisible)
-            {
-                // 只切屏幕显隐：**窗口尺寸/位置一律不动**（屏幕空间在 ApplyLayout 里始终预留），
-                // 所以这里不存在"布局瞬变帧" —— 立绘既不会被裁、也不需要隐藏（隐藏会让整个人闪一下）。
-                // 于是"震惊 → 冥想"这段过渡可以完整演出来（这正是用户提示的：把改动塞进已有过渡里）。
-                screenVisible = wantScreen;
-                FadeVis(screenBezel, wantScreen, 280);   // 淡入/淡出，而不是瞬间显隐（A 类突变）
-                if (wantScreen && mc != null) mc.Reset();
-            }
             if (next == "gaming" && prev != "gaming")
             {
                 // 进入游戏：**用户手动选定过就固定用那款**，否则随机挑一款（用户要求）
@@ -3356,12 +3948,60 @@ namespace DeepSeekPet
 
         void OnWheel(object sender, MouseWheelEventArgs e)
         {
-            SetScale(cfg.spriteWidth + (e.Delta > 0 ? 18 : -18));
+            // 滚轮分两义：悬停在**游戏屏**上 → 调游戏屏大小；其它地方 → 维持原来的立绘缩放
+            OnWheelAt(OverGameScreen(e), e.Delta);
+        }
+
+        /// <summary>滚轮语义的唯一决策点（拆出来是为了能被 --zoomtest 直接驱动，不依赖真实鼠标位置）</summary>
+        void OnWheelAt(bool overScreen, int delta)
+        {
+            int step = delta > 0 ? 1 : -1;
+            if (overScreen) { SetScreenScale(cfg.screenScale + 0.1 * step); return; }
+            SetScale(cfg.spriteWidth + 18 * step);
+        }
+
+        /// <summary>滚轮位置是否落在游戏屏上（用与屏幕点击同一套坐标：screenImage 自身的 240×160 坐标系）</summary>
+        bool OverGameScreen(MouseEventArgs e)
+        {
+            if (!screenVisible || screenBezel == null || screenImage == null) return false;
+            if (screenBezel.Visibility != Visibility.Visible) return false;   // Hidden 时它不参与命中，也不该吃掉滚轮
+            double sw = screenImage.ActualWidth, sh = screenImage.ActualHeight;
+            if (sw <= 0 || sh <= 0) return false;
+            Point p = e.GetPosition(screenImage);
+            return p.X >= 0 && p.Y >= 0 && p.X <= sw && p.Y <= sh;
+        }
+
+        /// <summary>
+        /// 把窗口整个拉回工作区。为什么必须有：屏放大到 150%/200% 时窗口会突然变宽 200–240 DIP，
+        /// 若她本来靠右边站，右半张游戏屏就直接挂到屏幕外（实测 2.0 档窗口右边缘超出 279 DIP）。
+        /// 与 SetScale 里那两行"贴边才拉"的区别：这里按**整窗**判定，放大后一律拉回来。
+        /// </summary>
+        void KeepOnScreen()
+        {
+            Rect wa = SystemParameters.WorkArea;
+            if (win.Left + win.Width > wa.Right) win.Left = wa.Right - win.Width;
+            if (win.Top + win.Height > wa.Bottom) win.Top = wa.Bottom - win.Height;
+            if (win.Left < wa.Left) win.Left = wa.Left;
+            if (win.Top < wa.Top) win.Top = wa.Top;
+            cfg.x = win.Left; cfg.y = win.Top;
+        }
+
+        /// <summary>设置游戏屏缩放倍率（0.5–2.0，夹取在 PetConfig.ClampScale）并按新尺寸重排窗口</summary>
+        void SetScreenScale(double s) { SetScreenScale(s, true); }
+        /// <summary>save=false 供开发自检使用（只改内存与布局，不写配置文件）</summary>
+        void SetScreenScale(double s, bool save)
+        {
+            cfg.screenScale = PetConfig.ClampScale(s);
+            ApplyLayout();
+            KeepOnScreen();   // 放大后别让游戏屏挂到屏幕外（见方法注释）
+            PetConfig.Log(string.Format(CultureInfo.InvariantCulture,
+                "screen scale -> {0:F2} (win {1:F0}x{2:F0} @{3:F0},{4:F0})", cfg.screenScale, win.Width, win.Height, win.Left, win.Top));
+            if (save) cfg.Save();
         }
 
         void SetScale(double w)
         {
-            cfg.spriteWidth = Math.Max(120, Math.Min(460, w));
+            cfg.spriteWidth = Math.Max(70, Math.Min(460, w));   // 下限 120→70（社区反馈：最小也偏大，参考 codex pet 尺寸）
             ApplyLayout();
             Rect wa = SystemParameters.WorkArea;
             if (win.Left > wa.Right - 60) win.Left = wa.Right - win.Width - 20;
