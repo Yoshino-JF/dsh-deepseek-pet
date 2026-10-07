@@ -44,6 +44,7 @@ namespace DeepSeekPet
         public string assetsDir = "";
         public string moodOverride = "auto";   // auto | idle | happy | worry | sleepy
         public string screenMode = "auto";     // auto | on | off —— 游戏屏（Minecraft 小显示器）
+        public string fps = "auto";              // auto | 30 | 60 | 120 —— 性能档位（auto=跟随屏幕刷新）
         public string game = "fp";             // fp = 伪 3D 第一人称砍树；side = 2D 横版清关
         /// <summary>true = 用户手动选定过游戏画面（点显示器切换 / 菜单选）→ 进入游戏时固定用这款，不再随机</summary>
         public bool gameFixed = false;
@@ -90,7 +91,7 @@ namespace DeepSeekPet
                     c.lowBalance = Num(d, "lowBalance", c.lowBalance);
                     c.assetsDir = Str(d, "assetsDir", c.assetsDir);
                     c.moodOverride = Str(d, "moodOverride", c.moodOverride);
-                    c.screenMode = Str(d, "screenMode", c.screenMode);
+                    c.screenMode = Str(d, "screenMode", c.screenMode); c.fps = Str(d, "fps", c.fps);
                     c.game = Str(d, "game", c.game);
             c.gameFixed = Bool(d, "gameFixed", c.gameFixed);
             c.bubbles = Bool(d, "bubbles", c.bubbles);
@@ -115,7 +116,7 @@ namespace DeepSeekPet
                 d["sway"] = sway; d["opacity"] = opacity; d["pollSeconds"] = pollSeconds;
                 d["longPollSeconds"] = longPollSeconds;
                 d["lowBalance"] = lowBalance; d["assetsDir"] = assetsDir; d["moodOverride"] = moodOverride;
-                d["screenMode"] = screenMode; d["game"] = game; d["gameFixed"] = gameFixed; d["bubbles"] = bubbles; d["gameIdleSeconds"] = gameIdleSeconds;
+                d["screenMode"] = screenMode; d["fps"] = fps;
                 d["sleepIdleSeconds"] = sleepIdleSeconds; d["creeperChance"] = creeperChance;
                 d["screenOnly"] = screenOnly;
                 JavaScriptSerializer ser = new JavaScriptSerializer();
@@ -175,7 +176,7 @@ namespace DeepSeekPet
     public class PetApp
     {
         /// <summary>桌宠版本号（与插件 @deepseekstudio/dsh-deepseek-pet 的版本保持一致，见 DEVLOG.md）</summary>
-        public const string Version = "0.2.10";
+        public const string Version = "0.2.11";
         /// <summary>开发用（--vnmood love|angry）：启动即演一次满好感/生气画面，便于验收截图</summary>
         public static string VnMood = "";
         /// <summary>开发用（--sidetest）：横版屏摆一个"血少+有食物+骷髅在射程"的局面，便于验收战斗</summary>
@@ -1032,19 +1033,22 @@ namespace DeepSeekPet
 
             // 游戏屏动画时钟（20 FPS，只在屏幕可见时干活）
             animTimer = new DispatcherTimer();
-            animTimer.Interval = TimeSpan.FromMilliseconds(50);
+            const double AnimStep = 0.016;   // 游戏屏步长≈60fps（逻辑是 dt 时间制，改帧率不改速度）
+            animTimer.Interval = TimeSpan.FromMilliseconds(16);
             animTimer.Tick += delegate
             {
-                StepWork(0.05);          // 「被叫去干活」的收尾动画要在屏幕隐藏后也能跑完
+                StepWork(AnimStep);          // 「被叫去干活」的收尾动画要在屏幕隐藏后也能跑完
                 UpdateBeamAndPose();     // 投影光柱 + 姿态优先不变量
                 if (!screenVisible || mc == null) return;
-                mc.Tick(0.05);
+                mc.Tick(AnimStep);
                 screenText.Visibility = mc.ShowDiedOverlay ? Visibility.Visible : Visibility.Collapsed;
                 screenSubText.Visibility = mc.ShowDiedOverlay ? Visibility.Visible : Visibility.Collapsed;
                 // MC 的「原木 N」只属于两块 Minecraft 屏，galgame 屏不该出现
                 UpdateScreenOverlays();
             };
             animTimer.Start();
+            ApplyFpsPreset();   // 启动即按配置档位设置游戏屏时钟
+            PetConfig.Log("fps cfg=" + cfg.fps + " target=" + FpsInterval(cfg.fps).ToString("F4") + " animTimer=" + (animTimer == null ? "null" : animTimer.Interval.TotalMilliseconds.ToString("F0") + "ms"));
 
             // --- 气泡 ---
             bubble = new Border();
@@ -1534,6 +1538,30 @@ namespace DeepSeekPet
             miBubbles.Header = "气泡特效";
             miBubbles.IsCheckable = true; miBubbles.IsChecked = cfg.bubbles;
             miBubbles.Click += delegate { cfg.bubbles = miBubbles.IsChecked; cfg.Save(); if (cfg.bubbles) bubbleNext = DateTime.MinValue; };
+            // ---- 性能档位（30/60/120/自动跟随屏幕）----
+            // 动画全部基于 dt（正弦按墙钟、游戏按 dt 积分），所以限帧只影响平滑度与 CPU，不改变动作速度。
+            // 注意：WPF 的 MenuItem 没有单选组（IsCheckable 只是独立复选框），必须手动互斥。
+            MenuItem miFps = new MenuItem(); miFps.Header = "性能档位";
+            string[] fpsVals = new string[] { "auto", "30", "60", "120" };
+            string[] fpsNames = new string[] { "自动跟随屏幕（推荐）", "30 帧（省电）", "60 帧", "120 帧（需 120Hz 屏）" };
+            MenuItem[] fpsItems = new MenuItem[fpsVals.Length];
+            for (int fi = 0; fi < fpsVals.Length; fi++)
+            {
+                MenuItem it = new MenuItem(); it.Header = fpsNames[fi]; it.IsCheckable = true;
+                fpsItems[fi] = it;
+                string v = fpsVals[fi];
+                it.Click += delegate
+                {
+                    cfg.fps = v;
+                    // 手动互斥：勾中自己、取消其余（WPF 菜单项不提供单选组）
+                    for (int k = 0; k < fpsItems.Length; k++) fpsItems[k].IsChecked = (k == fi);
+                    ApplyFpsPreset(); cfg.Save();
+                    PetConfig.Log("fps preset -> " + v);
+                };
+                miFps.Items.Add(it);
+            }
+            miFps.SubmenuOpened += delegate { for (int k = 0; k < fpsItems.Length; k++) fpsItems[k].IsChecked = (fpsVals[k] == cfg.fps); };
+            menu.Items.Add(miFps);
             menu.Items.Add(miSway);            // 动效开关：摇摆呼吸 + 气泡特效放在一起（用户要求）
             menu.Items.Add(miBubbles);
 
@@ -1673,10 +1701,11 @@ namespace DeepSeekPet
             if (idleTimer == null)
             {
                 idleTimer = new DispatcherTimer();
-                idleTimer.Interval = TimeSpan.FromMilliseconds(110);
+                // 待机动画改由 OnIdleFrame（渲染帧）驱动，此定时器保留但不再启动
                 idleTimer.Tick += delegate { IdleTick(); };
             }
-            idleTimer.Start();
+            CompositionTarget.Rendering -= OnIdleFrame;
+            CompositionTarget.Rendering += OnIdleFrame;   // 跟屏刷新驱动待机动画
             if (blinkTimer == null)
             {
                 blinkTimer = new DispatcherTimer();
@@ -1688,9 +1717,50 @@ namespace DeepSeekPet
         }
 
         /// <summary>待机动画：呼吸 + 摇摆 + 轻微缩放（9 FPS 足够，见 StartAnimation 注释）</summary>
+        // ===== 待机动画驱动：跟 WPF 渲染帧（≈显示器刷新率），不再用固定间隔定时器 =====
+        // IdleTick 内部全部基于墙钟时间（Math.Sin(t)），驱动变快只让它更顺，不改变动作速度。
+        double idleDt = 1.0 / 60;
+        double fpsAccum = 0;   // 性能档位累加器
+        static double FpsInterval(string mode)
+        {
+            // auto=跟随屏幕（返回 0 表示不限帧）；数值档返回目标间隔秒数
+            if (mode == "30") return 1.0 / 30;
+            if (mode == "60") return 1.0 / 60;
+            if (mode == "120") return 1.0 / 120;
+            return 0;
+        }
+        void ApplyFpsPreset()
+        {
+            double iv = FpsInterval(cfg.fps);
+            if (animTimer != null) animTimer.Interval = TimeSpan.FromMilliseconds(iv <= 0 ? 16 : iv * 1000);
+        }
+        DateTime lastIdleFrame = DateTime.MinValue;
+        int idleFrameCount = 0;
+        int idleFpsLogLeft = 8;   // 启动后打 8 条帧率日志便于验收，之后自动停止
+        void OnIdleFrame(object sender, EventArgs e)
+        {
+            DateTime now = DateTime.Now;
+            idleDt = lastIdleFrame == DateTime.MinValue ? 1.0 / 60 : (now - lastIdleFrame).TotalSeconds;
+            lastIdleFrame = now;
+            if (idleDt > 0.1) idleDt = 0.1;      // 卡顿后钳制，避免动作跳步
+            // 性能档位限帧：auto 不限；30/60/120 按目标间隔跳帧（idleDt 用累加值，速度不变）
+            fpsAccum += idleDt;
+            double fpsTarget = FpsInterval(cfg.fps);
+            if (fpsTarget <= 0 || fpsAccum >= fpsTarget)
+            {
+                if (fpsTarget > 0) { idleDt = fpsAccum; fpsAccum = 0; }
+                IdleTick();
+            }
+            if (++idleFrameCount >= 60 && idleFpsLogLeft > 0)
+            {
+                idleFpsLogLeft--; idleFrameCount = 0;
+                PetConfig.Log(string.Format("idlefps: 最近一帧 dt={0:F1}ms（≈{1:F0}fps，pose={2}）", idleDt * 1000, 1.0 / Math.Max(0.0001, idleDt), pose));
+            }
+        }
+
         void IdleTick()
         {
-            UpdateParticles(0.11);
+            UpdateParticles(idleDt);
             // 过渡帧到点后落到正式姿态（用户要的"1-2 帧过渡"）
             if (poseTransUntil != DateTime.MinValue && DateTime.Now >= poseTransUntil)
             {
@@ -1971,7 +2041,9 @@ namespace DeepSeekPet
             SetSpriteNaturalSize();
             int ms = nextFadeMs > 0 ? nextFadeMs : (animate ? 320 : 0);
             nextFadeMs = 0;
-            if (ms > 0) FadeThroughTo(want, Math.Max(160, ms / 3), ms); else CrossFadeTo(want, 0);
+            // 只做 2 帧过渡（≈33ms）：分层窗口里透明度动画每帧都要重算整窗 alpha，
+            // 原来的 160ms+ 慢淡会明显"卡一下"（用户实测）。2 帧足够读出"淡出→换图→淡入"的观感。
+            if (ms > 0) FadeThroughTo(want, 33, 33); else CrossFadeTo(want, 0);
         }
 
         /// <summary>场景 → 姿态：gaming=拿掌机玩、doze=打瞌睡、work=盘腿冥想（深度求索）、其余=站立待机</summary>
