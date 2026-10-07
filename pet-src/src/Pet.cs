@@ -204,7 +204,7 @@ namespace DeepSeekPet
     public class PetApp
     {
         /// <summary>桌宠版本号（与插件 @deepseekstudio/dsh-deepseek-pet 的版本保持一致，见 DEVLOG.md）</summary>
-        public const string Version = "0.2.13";
+        public const string Version = "0.2.14";
         /// <summary>开发用（--vnmood love|angry）：启动即演一次满好感/生气画面，便于验收截图</summary>
         public static string VnMood = "";
         /// <summary>开发用（--sidetest）：横版屏摆一个"血少+有食物+骷髅在射程"的局面，便于验收战斗</summary>
