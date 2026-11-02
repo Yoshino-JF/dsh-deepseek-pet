@@ -225,6 +225,8 @@ namespace DeepSeekPet
         public static string SceneTestMode = "basic";
         /// <summary>开发用（--clicktest）：启动 3s 后模拟一次"单击她"，复现点击相关链路</summary>
         public static bool ClickTest;
+        /// <summary>开发用（--shytest）：启动 3s 后连点 4 下，验证 A4「连点害羞」</summary>
+        public static bool ShyTest;
         /// <summary>开发用（--worktest）：启动后完整演一遍"被叫去干活"（打断 + 惊讶脸 + 暂停条 + 关屏 + 冥想）</summary>
         public static bool WorkTest;
         /// <summary>开发用（--uitest）：按用户操作序列跑一遍回归（调用同一批处理函数）</summary>
@@ -278,6 +280,7 @@ namespace DeepSeekPet
                     if (args[i] == "--scenetest") { SceneTest = true; if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) SceneTestMode = args[i + 1]; PetConfig.NoSave = true; }
                     if (args[i] == "--autoscene" && i + 1 < args.Length) AutoSceneTest = args[i + 1];   // 开发用：直接置于某自动状态
                     if (args[i] == "--clicktest") ClickTest = true;                                      // 开发用：模拟单击她
+            if (args[i] == "--shytest") ShyTest = true;                                          // 开发用（A4）：连点 4 下
                     if (args[i] == "--worktest") WorkTest = true;
                     if (args[i] == "--uitest") UiTest = true;
                     if (args[i] == "--menutest") MenuTest = true;
@@ -358,12 +361,23 @@ namespace DeepSeekPet
         DateTime dozeWakeUntil = DateTime.MinValue;
         DateTime devHoldUntil = DateTime.MinValue;   // 开发者"置于某状态"后的观察期：期内冻结场景机
         DateTime settleUntil = DateTime.MinValue;    // "叹气落座"过渡到期时刻（进入冥想前的 400ms 下沉）
+        // A4 增强：连点害羞 + 松手惯性
+        DateTime lastPetClick = DateTime.MinValue;   // 上一次被点的时间（判连点）
+        int petClickStreak = 0;                      // 1.2 秒内的连点次数
+        DateTime dragStartedAt = DateTime.MinValue;  // 本次拖动的起始时刻（算松手速度）
+        DispatcherTimer glideTimer = null;           // 惯性滑行时钟
         int nextFadeMs = 0;                          // 下一次交叉淡入的时长覆盖（0=用默认 320ms）
         bool fadingThrough = false;
         readonly System.Collections.Generic.Queue<object[]> sayQueue = new System.Collections.Generic.Queue<object[]>();   // 台词排队（避免多句互相覆盖）
         bool sayBusy = false;                  // 渐变过渡进行中：姿态不变量必须让路，否则会先跳一帧
         DateTime lastPoll = DateTime.MinValue;
         int failCount = 0;
+        // [A4+] 余额胶囊增强：更新时间小字 / 差额飘字 / 失败保留上次金额 / 低余额只提醒一次
+        TextBlock chipAge, deltaText;
+        DateTime lastGoodAt = DateTime.MinValue;
+        string lastGoodTotalText = "--";
+        bool hasGoodTotal = false;
+        bool lowWarned = false;
         bool blinkBusy = false;
         string lastMessage = "";
         Random rnd = new Random();
@@ -1299,10 +1313,44 @@ namespace DeepSeekPet
             chipRow.Children.Add(chipDot);
             chipRow.Children.Add(chipIcon);
             chipRow.Children.Add(chipText);
-            chip.Child = chipRow;
+            // 第二行：更新时间小字（"2 分钟前" / "2 小时前 · 暂未更新"）
+            chipAge = new TextBlock();
+            chipAge.Text = "";
+            chipAge.FontSize = 10;
+            chipAge.HorizontalAlignment = HorizontalAlignment.Center;
+            chipAge.Margin = new Thickness(0, 1, 0, 0);
+            chipAge.Foreground = new SolidColorBrush(Color.FromArgb(255, 150, 176, 210));
+            chipAge.FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI, sans-serif");
+            TextOptions.SetTextFormattingMode(chipAge, TextFormattingMode.Display);
+            chipAge.Visibility = Visibility.Collapsed;
+            StackPanel chipCol = new StackPanel();
+            chipCol.Orientation = Orientation.Vertical;
+            chipCol.Children.Add(chipRow);
+            chipCol.Children.Add(chipAge);
+            chip.Child = chipCol;
             Grid.SetRow(chip, 3);
             root.Children.Add(chip);
             chip.Visibility = cfg.showBalance ? Visibility.Visible : Visibility.Collapsed;
+            // 点胶囊：余额偏低 → 打开充值页；否则立即刷新
+            chip.Cursor = System.Windows.Input.Cursors.Hand;
+            chip.MouseLeftButtonUp += delegate { OnChipClick(); };
+
+            // 差额飘字：−¥0.32 从胶囊上方浮起淡出
+            deltaText = new TextBlock();
+            deltaText.Text = "";
+            deltaText.FontSize = 13;
+            deltaText.FontWeight = FontWeights.Bold;
+            deltaText.HorizontalAlignment = HorizontalAlignment.Center;
+            deltaText.VerticalAlignment = VerticalAlignment.Bottom;
+            deltaText.Margin = new Thickness(0, 0, 0, 28);
+            deltaText.Foreground = new SolidColorBrush(Color.FromArgb(255, 255, 150, 140));
+            deltaText.FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI, sans-serif");
+            TextOptions.SetTextFormattingMode(deltaText, TextFormattingMode.Display);
+            deltaText.IsHitTestVisible = false;
+            deltaText.Opacity = 0;
+            deltaText.RenderTransform = new TranslateTransform();
+            Grid.SetRow(deltaText, 3);
+            root.Children.Add(deltaText);
             // 徽章文案（"深度思考中 余额 ¥92.60"这类）比窗口还宽时会被裁掉 —— 它不参与窗口公式，
             // 所以量出来把窗口宽度下限顶上去：尺寸一变就同步（挂在 SizeChanged 上，覆盖所有改文案的地方）
             chip.SizeChanged += delegate { SyncChipWidth(); };
@@ -1352,6 +1400,27 @@ namespace DeepSeekPet
                 ctt.Interval = TimeSpan.FromMilliseconds(3000);
                 ctt.Tick += delegate { ctt.Stop(); PetConfig.Log("clicktest: 模拟单击"); OnPetted(); };
                 ctt.Start();
+            }
+            if (PetApp.ShyTest)       // 开发验收（A4）：3s 后连点 4 下（200ms 一次），看「别戳啦！」那套反应
+            {
+                DispatcherTimer shyDelay = new DispatcherTimer();
+                shyDelay.Interval = TimeSpan.FromMilliseconds(3000);
+                shyDelay.Tick += delegate
+                {
+                    shyDelay.Stop();
+                    int shyLeft = 0;
+                    DispatcherTimer shyBurst = new DispatcherTimer();
+                    shyBurst.Interval = TimeSpan.FromMilliseconds(200);
+                    shyBurst.Tick += delegate
+                    {
+                        shyLeft++;
+                        PetConfig.Log("shytest: 第 " + shyLeft + " 次点击");
+                        OnPetted();
+                        if (shyLeft >= 4) shyBurst.Stop();
+                    };
+                    shyBurst.Start();
+                };
+                shyDelay.Start();
             }
             if (PetApp.CreeperTest)   // 开发验收：2.5s 后招一只苦力怕（应当**不出现**游戏屏）
             {
@@ -2313,6 +2382,16 @@ namespace DeepSeekPet
         void OnPetted()
         {
             lastSceneReset = DateTime.Now;
+            // A4：连点害羞 —— 1.2 秒内点到第 4 下就不干了
+            petClickStreak = (DateTime.Now - lastPetClick).TotalSeconds < 1.2 ? petClickStreak + 1 : 1;
+            lastPetClick = DateTime.Now;
+            if (petClickStreak >= 4)
+            {
+                petClickStreak = 0;
+                ShyShake();
+                SayKey("别戳啦！好痒…", 4);
+                return;
+            }
             lastUserAction = DateTime.Now;   // ⚠ 必须一起重置：ForceAutoState 曾把互动时间伪造到 600 秒前，
                                              // 不重置的话点击后睡眠计时立刻又把她判成打瞌睡（=卡在困倦，用户报的 bug）
             devHoldUntil = DateTime.MinValue;
@@ -3099,6 +3178,61 @@ namespace DeepSeekPet
             public FrameworkElement shape;   // 气泡/灰尘用 Ellipse，Zzz 用 TextBlock
         }
 
+        /// <summary>A4：被连点时的害羞抖动（左右快速晃 + 担心脸 1.8s）</summary>
+        void ShyShake()
+        {
+            DoubleAnimationUsingKeyFrames kf = new DoubleAnimationUsingKeyFrames();
+            kf.Duration = TimeSpan.FromMilliseconds(520);
+            double[] seq = new double[] { 0, -6, 6, -4.5, 4.5, -2, 0 };
+            for (int i = 0; i < seq.Length; i++)
+                kf.KeyFrames.Add(new LinearDoubleKeyFrame(seq[i], KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(i * 520.0 / (seq.Length - 1)))));
+            // 动画结束后必须摘掉，否则它会一直按住 Angle 属性，待机呼吸写不进去
+            kf.Completed += delegate { tfRotate.BeginAnimation(RotateTransform.AngleProperty, null); };
+            tfRotate.BeginAnimation(RotateTransform.AngleProperty, kf);
+            SetMood("worry", true);
+            moodHoldUntil = DateTime.Now.AddSeconds(1.8);
+            suspendBlinkUntil = DateTime.Now.AddSeconds(1.2);
+            PetConfig.Log("A4 shy-shake: 被连点害羞");
+        }
+
+        /// <summary>A4：松手后的惯性滑行（速度按时间衰减，碰到屏幕边缘停下）</summary>
+        void StartGlide(double vx, double vy)
+        {
+            if (glideTimer != null) { glideTimer.Stop(); glideTimer = null; }
+            DateTime last = DateTime.Now;
+            glideTimer = new DispatcherTimer();
+            glideTimer.Interval = TimeSpan.FromMilliseconds(16);
+            glideTimer.Tick += delegate
+            {
+                DateTime now = DateTime.Now;
+                double dt = Math.Min(0.05, (now - last).TotalSeconds);
+                last = now;
+                System.Windows.Rect wa = SystemParameters.WorkArea;
+                double nx = win.Left + vx * dt;
+                double ny = win.Top + vy * dt;
+                double minLeft = wa.Left - 20, maxLeft = wa.Right - 60;
+                double minTop = wa.Top - 20, maxTop = wa.Bottom - 60;
+                bool hitX = false, hitY = false;
+                if (nx <= minLeft) { nx = minLeft; hitX = true; }
+                if (nx >= maxLeft) { nx = maxLeft; hitX = true; }
+                if (ny <= minTop) { ny = minTop; hitY = true; }
+                if (ny >= maxTop) { ny = maxTop; hitY = true; }
+                win.Left = nx; win.Top = ny;
+                double decay = Math.Pow(0.91, dt / 0.016);   // 每 16ms 衰减到 91%
+                vx *= decay; vy *= decay;
+                if (hitX) vx = 0;
+                if (hitY) vy = 0;
+                if (Math.Abs(vx) + Math.Abs(vy) < 30)
+                {
+                    glideTimer.Stop(); glideTimer = null;
+                    cfg.x = win.Left; cfg.y = win.Top; cfg.Save();
+                    PetConfig.Log("A4 glide end -> x=" + win.Left.ToString("F0") + " y=" + win.Top.ToString("F0"));
+                }
+            };
+            glideTimer.Start();
+            PetConfig.Log("A4 glide start vx=" + vx.ToString("F0") + " vy=" + vy.ToString("F0"));
+        }
+
         void Bounce()
         {
             bounceUntil = DateTime.Now.AddMilliseconds(560);
@@ -3765,6 +3899,58 @@ namespace DeepSeekPet
         static bool GetB(Dictionary<string, object> d, string k, bool def)
         { object v; if (d.TryGetValue(k, out v) && v != null) { bool r; if (bool.TryParse(Convert.ToString(v), out r)) return r; } return def; }
 
+        // ---------- A4+ 余额胶囊：更新小字 / 差额飘字 / 点胶囊 ----------
+
+        string AgeText(DateTime t, bool stale)
+        {
+            string body;
+            if (t == DateTime.MinValue) body = "暂未更新";
+            else
+            {
+                double sec = Math.Max(0, (DateTime.Now - t).TotalSeconds);
+                if (sec < 45) body = "刚刚更新";
+                else if (sec < 3600) body = ((int)(sec / 60)).ToString() + " 分钟前";
+                else if (sec < 86400) body = ((int)(sec / 3600)).ToString() + " 小时前";
+                else body = ((int)(sec / 86400)).ToString() + " 天前";
+            }
+            return (stale && t != DateTime.MinValue) ? body + " · 暂未更新" : body;
+        }
+
+        void ShowDelta(double delta)
+        {
+            if (deltaText == null) return;
+            if (Math.Abs(delta) < 0.005) return;
+            deltaText.Text = (delta > 0 ? "+¥" : "-¥") + Math.Abs(delta).ToString("0.00");
+            if (delta > 0) deltaText.Foreground = new SolidColorBrush(Color.FromArgb(255, 120, 230, 160));
+            else deltaText.Foreground = new SolidColorBrush(Color.FromArgb(255, 255, 150, 140));
+            TranslateTransform tt = deltaText.RenderTransform as TranslateTransform;
+            if (tt == null) { tt = new TranslateTransform(); deltaText.RenderTransform = tt; }
+            tt.BeginAnimation(TranslateTransform.YProperty, null);
+            DoubleAnimation rise = new DoubleAnimation(0, -26, TimeSpan.FromMilliseconds(1100));
+            QuadraticEase ease = new QuadraticEase();
+            ease.EasingMode = EasingMode.EaseOut;
+            rise.EasingFunction = ease;
+            tt.BeginAnimation(TranslateTransform.YProperty, rise);
+            DoubleAnimation fade = new DoubleAnimation(0.95, 0, TimeSpan.FromMilliseconds(1100));
+            deltaText.BeginAnimation(UIElement.OpacityProperty, fade);
+        }
+
+        void OnChipClick()
+        {
+            PetSnapshot s = null;
+            lock (stateLock) { s = latest; }
+            bool low = s != null && s.ok && !double.IsNaN(s.total) && s.total < s.lowBalance;
+            if (low)
+            {
+                try { System.Diagnostics.Process.Start("https://platform.deepseek.com/top_up"); } catch { }
+                SaySoft("充值页给你打开啦，回来记得看看余额～", 5);
+            }
+            else
+            {
+                RefreshNow(true);
+            }
+        }
+
         void OnState(PetSnapshot s, bool announce)
         {
             // 插件点名让桌宠退出（右键菜单里没有「被远端关掉」的入口，这是唯一的软关闭通道）
@@ -3788,8 +3974,22 @@ namespace DeepSeekPet
                 SaySoft("咦…我暂时看不到余额了…（拿不到数据）", 5);
             }
 
-            // 余额徽章
-            chipText.Text = "余额 " + s.TotalText;
+            // 余额徽章（A4+：更新时间 / 失败保留上次金额）
+            bool haveTotal = !double.IsNaN(s.total);
+            if (s.ok && haveTotal)
+            {
+                lastGoodAt = DateTime.Now;
+                lastGoodTotalText = s.TotalText;
+                hasGoodTotal = true;
+            }
+            if (chipAge != null)
+            {
+                chipAge.Text = s.ok ? AgeText(lastGoodAt, false) : (hasGoodTotal ? AgeText(lastGoodAt, true) : "暂未更新");
+                chipAge.Visibility = Visibility.Visible;
+                chipAge.Foreground = new SolidColorBrush(s.ok ? Color.FromArgb(255, 150, 176, 210) : Color.FromArgb(255, 180, 190, 205));
+            }
+            // 失败不清零：保留上一次成功拿到的金额，避免"没钱了"的误读
+            chipText.Text = s.ok ? ("余额 " + s.TotalText) : ("余额 " + (hasGoodTotal ? lastGoodTotalText : "--"));
             if (!s.ok)
             {
                 chipDot.Fill = new SolidColorBrush(Color.FromArgb(255, 150, 150, 160));
@@ -3818,6 +4018,20 @@ namespace DeepSeekPet
                 chip.Opacity = 1;
             }
 
+            // 低余额：只在"跨过阈值"那一刻提醒一次，充值回来后重新武装（避免反复打扰）
+            bool isLowNow = s.ok && s.isAvailable && haveTotal && s.total < s.lowBalance;
+            if (isLowNow && !lowWarned)
+            {
+                lowWarned = true;
+                SaySoft("钱包快空了…只剩 " + s.TotalText + "。点我下面那块胶囊可以去充值", 7);
+                SetMood("worry", false);
+                moodHoldUntil = DateTime.Now.AddSeconds(7);
+            }
+            else if (!isLowNow && s.ok)
+            {
+                lowWarned = false;
+            }
+
             // 金额变化播报
             // ⚠ 必须去重 + 冷却：这个分支曾反复触发（不同调用路径下 prev 未推进 → 每轮都判成"余额上涨"），
             // 表现就是她在"比耶(happy)"与"站立(idle)"之间反复闪 —— 用户报的闪烁 bug。
@@ -3830,6 +4044,7 @@ namespace DeepSeekPet
                 double delta = s.total - prev.total;
                 lastAnnouncedTotal = s.total;
                 balanceAnnounceUntil = DateTime.Now.AddSeconds(6);   // 20 秒冷却
+                ShowDelta(delta);
                 if (delta > 0)
                 {
                     SaySoft("收到充值 " + s.TotalText + "，谢谢主人！" + PorkLine(s.total) + " " + BalanceComment(s.total), 6);
@@ -3882,6 +4097,7 @@ namespace DeepSeekPet
         {
             lastUserAction = DateTime.Now;
             System.Drawing.Point p0 = WinForms.Control.MousePosition;
+            dragStartedAt = DateTime.Now;                 // A4：记开始时间，松手时算速度
             dragging = true;                              // 拖着的时候：不玩游戏、不出光、不出屏
             pickShown = false;
             // 长按 180ms 才进入"被拎起"：单击（想触发对话/互动）不会闪出拎起动作
@@ -3938,6 +4154,13 @@ namespace DeepSeekPet
             cfg.x = win.Left; cfg.y = win.Top; cfg.Save();
             PetConfig.Log("drag end -> resume pose=" + pose + " (no transition frame)");
             double dx = Math.Abs(p1.X - p0.X), dy = Math.Abs(p1.Y - p0.Y);
+            // A4：松手带惯性 —— 甩得快的会自己滑一段再停下
+            double glideDt = (DateTime.Now - dragStartedAt).TotalSeconds;
+            if (glideDt > 0.05 && (dx + dy) >= 4)
+            {
+                double vx = (p1.X - p0.X) / glideDt, vy = (p1.Y - p0.Y) / glideDt;
+                if (Math.Abs(vx) + Math.Abs(vy) > 260) StartGlide(vx * 0.55, vy * 0.55);
+            }
             if (dx < 4 && dy < 4)
             {
                 OnPetted();     // 单击：蹦跳 + 星星 + 台词（抽成方法，供 --clicktest 复用）
